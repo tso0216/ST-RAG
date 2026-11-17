@@ -1,0 +1,585 @@
+{
+  "title": "[問題]實體sim卡問題 samsung S23 and pixel 6",
+  "author": "nanokevin",
+  "time": "Wed Jul 22 01:33:46 2026",
+  "url": "https://www.ptt.cc/bbs/Japan_Travel/M.1784655228.A.F9C.html",
+  "text": "旅日達人們好\n小弟兩周後要帶家人去九州八天\n因為我的手機samsung S23U 沒有esim (三星旗艦居然...)\n所以需要物色實體sim 卡\n另外家母用pixel 6 pro 也需要買一張給她 怕臨時跟丟可以打line 找人\n\n去蝦皮問了一些店家得到的資訊讓我有點困惑\n1. 有店家說pxiel 6 pro 不能用日本實體網卡\n2. 有店家說samsung S23 不可以用KDDI\n3. 也有店家說這兩隻都可以用KDDI\n4. 另一個店家說pixel 6 pro 可以用實體網卡, 但pixel 8 以後的不行\n\n不知有沒有板友自己或是親友有用過上述手機並買過實體網卡的可以解惑?\n\n目前感覺風險比較小的是 samsung S23U 買 softbank 原生卡\npxiel 的 買全網通 (softbank + KDDI)\n\n不知道這樣選正不正確\n希望板友指正\n謝謝",
+  "comments": [
+    {
+      "tag": "推",
+      "user": "JhouHank",
+      "content": "風險最小的應該是原號漫遊吧？",
+      "time": "07/22 01:38"
+    },
+    {
+      "tag": "→",
+      "user": "sinohara",
+      "content": "看個人需求 如果需要用到日本IP服務就不能用漫遊了",
+      "time": "07/22 02:01"
+    },
+    {
+      "tag": "推",
+      "user": "NSPS6150",
+      "content": "我都租wifi最簡單",
+      "time": "07/22 02:21"
+    },
+    {
+      "tag": "推",
+      "user": "tonylaio",
+      "content": "租WiFi原始人",
+      "time": "07/22 07:41"
+    },
+    {
+      "tag": "→",
+      "user": "mvpdirk712",
+      "content": "去手機板問會比較多人可以回答你",
+      "time": "07/22 08:17"
+    },
+    {
+      "tag": "→",
+      "user": "clairehao",
+      "content": "直接辦漫遊吧 也不貴",
+      "time": "07/22 08:43"
+    },
+    {
+      "tag": "推",
+      "user": "john0628",
+      "content": "我上次原始人家人不會設定 就直接叫他去買漫遊= =",
+      "time": "07/22 08:48"
+    },
+    {
+      "tag": "推",
+      "user": "dahonehsueh",
+      "content": "Pixel 6 pro的發熱及耗電，勸你不要碰，一個從P6P",
+      "time": "07/22 08:49"
+    },
+    {
+      "tag": "→",
+      "user": "dahonehsueh",
+      "content": "跳到S23U的過來人的良心建議",
+      "time": "07/22 08:49"
+    },
+    {
+      "tag": "→",
+      "user": "dahonehsueh",
+      "content": "啊，沒看清楚文章，原來已經有P6P了。那我也是建議",
+      "time": "07/22 08:52"
+    },
+    {
+      "tag": "→",
+      "user": "dahonehsueh",
+      "content": "原號漫遊就好，如果是台哥大，還有共享流量的方案",
+      "time": "07/22 08:52"
+    },
+    {
+      "tag": "→",
+      "user": "dahonehsueh",
+      "content": "可選，輕量用戶都夠用",
+      "time": "07/22 08:52"
+    },
+    {
+      "tag": "推",
+      "user": "gogo79979",
+      "content": "原來2062年了還有人在租wifi機",
+      "time": "07/22 08:55"
+    },
+    {
+      "tag": "→",
+      "user": "gogo79979",
+      "content": "pxiel 6 pro可以啦，蝦皮便宜的原生卡隨便買就好",
+      "time": "07/22 08:56"
+    },
+    {
+      "tag": "→",
+      "user": "gogo79979",
+      "content": "網紅推薦的直接刪除",
+      "time": "07/22 08:56"
+    },
+    {
+      "tag": "→",
+      "user": "gogo79979",
+      "content": "你跟說可以的店家買啊，漫遊可以當備用方案",
+      "time": "07/22 08:57"
+    },
+    {
+      "tag": "推",
+      "user": "Feeng",
+      "content": "最根本的問題是 現在還有實體sim卡是手機不能用嗎?",
+      "time": "07/22 09:15"
+    },
+    {
+      "tag": "推",
+      "user": "mvpdirk712",
+      "content": "我P9耗電也是滿奇葩的，睡一晚可以掉電15%",
+      "time": "07/22 09:22"
+    },
+    {
+      "tag": "推",
+      "user": "nightwind209",
+      "content": "我跟家人出去是低總量漫遊配吃到飽wifi機",
+      "time": "07/22 09:28"
+    },
+    {
+      "tag": "→",
+      "user": "lyhorcish",
+      "content": "原號漫遊吧，如果是台灣大哥大門號，漫遊共享包4人",
+      "time": "07/22 09:54"
+    },
+    {
+      "tag": "→",
+      "user": "lyhorcish",
+      "content": "7日5G 499元，我是買AIC eSIM卡，然後買eSIM方案",
+      "time": "07/22 09:56"
+    },
+    {
+      "tag": "→",
+      "user": "lovelyinn",
+      "content": "S23 ultra 用蝦皮買的日本 sim 卡。都可以用。反而",
+      "time": "07/22 09:58"
+    },
+    {
+      "tag": "→",
+      "user": "lovelyinn",
+      "content": "是中國機不行。若要 esim 可以買 AIC esim 轉實體。",
+      "time": "07/22 09:58"
+    },
+    {
+      "tag": "→",
+      "user": "lovelyinn",
+      "content": "但是 蝦皮買的到一定流量都會限流。不管是實體或 es",
+      "time": "07/22 09:58"
+    },
+    {
+      "tag": "→",
+      "user": "lovelyinn",
+      "content": "im  買 KLOOK 的也許好一點",
+      "time": "07/22 09:58"
+    },
+    {
+      "tag": "推",
+      "user": "maikfan",
+      "content": "同S23使用者經驗，蝦皮隨便買張sim卡就好了",
+      "time": "07/22 10:02"
+    },
+    {
+      "tag": "→",
+      "user": "hanx5566",
+      "content": "買AIC sim卡就可以用esim了，我之間就這樣做",
+      "time": "07/22 10:17"
+    },
+    {
+      "tag": "推",
+      "user": "leejones",
+      "content": "陸版手機沒有不行喔！只要手機和sim卡4g頻率有對應",
+      "time": "07/22 10:30"
+    },
+    {
+      "tag": "→",
+      "user": "leejones",
+      "content": "到，原則上都可以用，已經用好幾年了。",
+      "time": "07/22 10:30"
+    },
+    {
+      "tag": "推",
+      "user": "kimicino",
+      "content": "原號漫遊",
+      "time": "07/22 10:40"
+    },
+    {
+      "tag": "推",
+      "user": "iqmen2003",
+      "content": "原號漫遊或台哥大預付卡漫遊通",
+      "time": "07/22 10:57"
+    },
+    {
+      "tag": "推",
+      "user": "angol1337",
+      "content": "要長輩換卡風險太高了，高機率回台後會發現卡不見",
+      "time": "07/22 11:00"
+    },
+    {
+      "tag": "推",
+      "user": "pupuliao",
+      "content": "除非長輩有看YT，不然 漫遊兩三百搞定 別費心了",
+      "time": "07/22 11:04"
+    },
+    {
+      "tag": "→",
+      "user": "pupuliao",
+      "content": "每次我媽出國我都幫他這樣弄 只要先幫他把漫遊開起",
+      "time": "07/22 11:05"
+    },
+    {
+      "tag": "→",
+      "user": "pupuliao",
+      "content": "跟他說 下飛機 手機重開 就好",
+      "time": "07/22 11:05"
+    },
+    {
+      "tag": "推",
+      "user": "fireguard119",
+      "content": "如果是台哥大門號就直接買漫遊吧，現在月租型門號",
+      "time": "07/22 11:45"
+    },
+    {
+      "tag": "→",
+      "user": "fireguard119",
+      "content": "買漫遊還有送LAWSON 100元+冰品。",
+      "time": "07/22 11:45"
+    },
+    {
+      "tag": "噓",
+      "user": "gogo79979",
+      "content": "漫遊就漫遊，幾個退文硬要提台哥大的ya的很尷尬",
+      "time": "07/22 11:47"
+    },
+    {
+      "tag": "→",
+      "user": "gogo79979",
+      "content": "那幾個id好像都有共同點",
+      "time": "07/22 11:48"
+    },
+    {
+      "tag": "→",
+      "user": "fireguard119",
+      "content": "#1fWlrrV6 (Japan_Travel)",
+      "time": "07/22 11:49"
+    },
+    {
+      "tag": "推",
+      "user": "madeinjason",
+      "content": "你自己研究就好，老人一律漫遊",
+      "time": "07/22 11:52"
+    },
+    {
+      "tag": "推",
+      "user": "kuff220",
+      "content": "pixel6用ESIM就好了吧",
+      "time": "07/22 11:54"
+    },
+    {
+      "tag": "推",
+      "user": "yumeixuan",
+      "content": "漫遊兩三百是只買1G用1個禮拜嗎...",
+      "time": "07/22 12:10"
+    },
+    {
+      "tag": "→",
+      "user": "xd4gsd4r",
+      "content": "原卡原號漫遊才是最省事 但要提醒不要一直刷影片",
+      "time": "07/22 12:39"
+    },
+    {
+      "tag": "推",
+      "user": "pupuliao",
+      "content": "樓上  漫遊 2G 249三大電信都這個價 我9天8夜夠用",
+      "time": "07/22 12:56"
+    },
+    {
+      "tag": "→",
+      "user": "pupuliao",
+      "content": "上次我媽去美國我也買這格度沒聽說啥問題",
+      "time": "07/22 12:57"
+    },
+    {
+      "tag": "→",
+      "user": "pupuliao",
+      "content": "只要不刷影片 平常使用根本沒問題",
+      "time": "07/22 12:57"
+    },
+    {
+      "tag": "推",
+      "user": "phisho",
+      "content": "Pixel的問題在之前的OS update已經解決",
+      "time": "07/22 13:00"
+    },
+    {
+      "tag": "推",
+      "user": "pupuliao",
+      "content": "而且會有簡訊提醒 臨時補充流量也可以",
+      "time": "07/22 13:04"
+    },
+    {
+      "tag": "→",
+      "user": "pupuliao",
+      "content": "不然你要幫全家人換SIM卡喔",
+      "time": "07/22 13:05"
+    },
+    {
+      "tag": "推",
+      "user": "underwind",
+      "content": "S23U使用者,就買個原生SIM卡就好了 都不錯用的",
+      "time": "07/22 13:57"
+    },
+    {
+      "tag": "噓",
+      "user": "gogo79979",
+      "content": "換自己跟媽媽的實體sim卡，是多困難？",
+      "time": "07/22 14:24"
+    },
+    {
+      "tag": "→",
+      "user": "gogo79979",
+      "content": "怎麼有些推文講的多難似的",
+      "time": "07/22 14:24"
+    },
+    {
+      "tag": "→",
+      "user": "hk129900",
+      "content": "pixel6不是可以用ESIM嗎 沒必要特地選實體卡吧",
+      "time": "07/22 14:40"
+    },
+    {
+      "tag": "→",
+      "user": "a6214666",
+      "content": "我都買台哥預付卡",
+      "time": "07/22 15:09"
+    },
+    {
+      "tag": "推",
+      "user": "pupuliao",
+      "content": "是不難拉，但重開機不是更快??",
+      "time": "07/22 15:24"
+    },
+    {
+      "tag": "推",
+      "user": "leosky41",
+      "content": "S23U日本原生KDDI沒問題",
+      "time": "07/22 15:49"
+    },
+    {
+      "tag": "→",
+      "user": "Sougetu",
+      "content": "我覺得兩邊都該用漫遊",
+      "time": "07/22 16:41"
+    },
+    {
+      "tag": "推",
+      "user": "dahonehsueh",
+      "content": "提到台哥大就說人家在業，我就台哥大用戶只熟它的",
+      "time": "07/22 17:30"
+    },
+    {
+      "tag": "→",
+      "user": "dahonehsueh",
+      "content": "漫遊啊！其他家有好的方案也可以建議嘛！",
+      "time": "07/22 17:30"
+    },
+    {
+      "tag": "→",
+      "user": "eric00169",
+      "content": "我s23 哪個說不能用kddi的",
+      "time": "07/22 17:30"
+    },
+    {
+      "tag": "→",
+      "user": "eric00169",
+      "content": "你找蝦皮賣家不如直接看正常販售的店家原生卡的說明",
+      "time": "07/22 17:31"
+    },
+    {
+      "tag": "推",
+      "user": "picklecak",
+      "content": "買台哥大漫遊就好了  最輕鬆",
+      "time": "07/22 17:41"
+    },
+    {
+      "tag": "→",
+      "user": "cofw",
+      "content": "三星一直都不能用esim，但是我用實體去日本那麼多次",
+      "time": "07/22 17:48"
+    },
+    {
+      "tag": "→",
+      "user": "cofw",
+      "content": "也沒遇到三星遇到哪家電信就不能用的",
+      "time": "07/22 17:48"
+    },
+    {
+      "tag": "推",
+      "user": "john0628",
+      "content": "換卡簡單不過碰到要去設定apn 應該老人家就GG",
+      "time": "07/22 18:00"
+    },
+    {
+      "tag": "噓",
+      "user": "gogo79979",
+      "content": "高能嗎？如果本來是中華遠傳要怎麼大哥大漫遊？",
+      "time": "07/22 19:04"
+    },
+    {
+      "tag": "噓",
+      "user": "gogo79979",
+      "content": "這麼巧，推文沒人推薦中華漫遊遠傳漫遊",
+      "time": "07/22 19:06"
+    },
+    {
+      "tag": "→",
+      "user": "gogo79979",
+      "content": "一堆id一直台哥大好棒",
+      "time": "07/22 19:06"
+    },
+    {
+      "tag": "→",
+      "user": "gogo79979",
+      "content": "此地無銀三百兩",
+      "time": "07/22 19:07"
+    },
+    {
+      "tag": "推",
+      "user": "gogo79979",
+      "content": "別人不說，iqmen2003這id大家自己搜一下",
+      "time": "07/22 19:11"
+    },
+    {
+      "tag": "推",
+      "user": "JYCN",
+      "content": "原電信漫遊就好了，還可以隨時app續容量",
+      "time": "07/22 19:25"
+    },
+    {
+      "tag": "推",
+      "user": "Sunblacktea",
+      "content": "直接原號漫遊最快",
+      "time": "07/22 19:27"
+    },
+    {
+      "tag": "推",
+      "user": "dereklinn",
+      "content": "5 月剛去東京，也是拿pixel 6 pro， 我直接辦原號",
+      "time": "07/22 20:07"
+    },
+    {
+      "tag": "→",
+      "user": "dereklinn",
+      "content": "漫遊（ 實體卡），旅途中沒什問題，很順",
+      "time": "07/22 20:07"
+    },
+    {
+      "tag": "推",
+      "user": "Queen957",
+      "content": "台哥漫遊就兩種啊，一種給用戶的原號漫遊，一種用",
+      "time": "07/22 20:08"
+    },
+    {
+      "tag": "→",
+      "user": "Queen957",
+      "content": "戶跟非用戶都能用的預付卡漫遊通，就看習慣囉",
+      "time": "07/22 20:08"
+    },
+    {
+      "tag": "→",
+      "user": "fireguard119",
+      "content": "我買原號漫遊都是買吃到飽的，中華跟遠傳單日到2GB",
+      "time": "07/22 21:18"
+    },
+    {
+      "tag": "→",
+      "user": "fireguard119",
+      "content": "還會降速，那我幹嘛推薦這兩家。",
+      "time": "07/22 21:18"
+    },
+    {
+      "tag": "推",
+      "user": "nagual",
+      "content": "都用台哥大漫遊，然後都用多門號那個方案",
+      "time": "07/22 22:13"
+    },
+    {
+      "tag": "→",
+      "user": "nagual",
+      "content": "以前也用sim卡，後來親戚大部分台哥大，一起用方便",
+      "time": "07/22 22:14"
+    },
+    {
+      "tag": "推",
+      "user": "jennycute316",
+      "content": "我也都租wifi 機，其實也是很方便的",
+      "time": "07/22 22:15"
+    },
+    {
+      "tag": "→",
+      "user": "sinohara",
+      "content": "台哥也是會降速的",
+      "time": "07/22 23:36"
+    },
+    {
+      "tag": "推",
+      "user": "videoproblem",
+      "content": "雖然不喜歡富邦的台哥大 但不考慮來路不明的esim最",
+      "time": "07/22 23:56"
+    },
+    {
+      "tag": "→",
+      "user": "videoproblem",
+      "content": "便宜的只剩漫遊通",
+      "time": "07/22 23:56"
+    },
+    {
+      "tag": "→",
+      "user": "cutejojocat",
+      "content": "Pixel之前用SB ESIM有問題 改DOCOMO迴線的IIJ雖然",
+      "time": "07/23 00:17"
+    },
+    {
+      "tag": "→",
+      "user": "cutejojocat",
+      "content": "不快但至少能用",
+      "time": "07/23 00:17"
+    },
+    {
+      "tag": "推",
+      "user": "d1438a",
+      "content": "23U蝦皮隨便買的卡",
+      "time": "07/23 07:47"
+    },
+    {
+      "tag": "噓",
+      "user": "s910928",
+      "content": "無日旅點，請洽手機板",
+      "time": "07/23 08:49"
+    },
+    {
+      "tag": "推",
+      "user": "x864564x",
+      "content": "這麼麻煩為啥不直接買漫遊 原號漫遊就沒有那麼多限",
+      "time": "07/23 17:13"
+    },
+    {
+      "tag": "→",
+      "user": "x864564x",
+      "content": "制了吧",
+      "time": "07/23 17:13"
+    },
+    {
+      "tag": "→",
+      "user": "x864564x",
+      "content": "我跟我家人出去也都是遠傳的漫遊 先說因為全家都是",
+      "time": "07/23 17:13"
+    },
+    {
+      "tag": "→",
+      "user": "x864564x",
+      "content": "遠傳其他家的狀況不清楚",
+      "time": "07/23 17:13"
+    },
+    {
+      "tag": "→",
+      "user": "x864564x",
+      "content": "漫遊就是很方便又省事阿",
+      "time": "07/23 17:13"
+    },
+    {
+      "tag": "推",
+      "user": "yocjh9539",
+      "content": "AIC SIM+原生Esim很順",
+      "time": "07/23 22:54"
+    },
+    {
+      "tag": "推",
+      "user": "gp125",
+      "content": "推樓上.三星FOLD7也沒給esim,用AIC出國兩次都蠻穩定",
+      "time": "07/27 10:57"
+    }
+  ]
+}

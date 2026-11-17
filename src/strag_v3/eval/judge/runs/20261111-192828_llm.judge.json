@@ -1,0 +1,1181 @@
+{
+  "config": {
+    "model": "claude-sonnet-5-5",
+    "effort": "medium",
+    "n": 1,
+    "pass": 0.5,
+    "coverage": {
+      "name": "covers_point",
+      "instructions": "答案有沒有說出跟這條重點相同的事實？用字可以不同，但內容要一致：講到同一件事卻結論相反、數字或時間不同、地點不同，都算沒涵蓋。重點開頭寫了時間或地點（例如「5 月下午：」「六義園：」）時，答案的時間或地點也要對得上。",
+      "criteria": {
+        "true": "答案裡有說法跟這條重點的事實一致，結論、數字、時間、地點都對得上。",
+        "false": "答案沒提到這件事，或提到了但結論相反、數字或時間不同、地點不同。"
+      }
+    },
+    "unsupported": {
+      "name": "unsupported_claim",
+      "instructions": "答案裡有沒有標準答案不支持的經驗說法？經驗說法是描述某個地點在某個時間實際是什麼狀況的說法（人潮、排隊、開放、景色、交通狀況等），不論是不是旅客親身經歷的口吻。每條經驗說法都要能在 reference_fragments 或 time_unknown_fragments 裡找到依據：內容一致，地點和時間也要跟該片段對得上。時間看的是片段自己的時間標籤，不是問的時間：答案明說這是另一個時間的經驗、而且跟片段的時間標籤一致，就算有依據。任何一條找不到依據，就是有。建議、一般介紹、說明沒有資料，不是經驗說法。",
+      "criteria": {
+        "true": "有：至少一條經驗說法在標準片段和時間不明片段裡都找不到依據，或地點、時間跟依據對不上。",
+        "false": "沒有：每條經驗說法都找得到依據，或答案沒有任何經驗說法。"
+      }
+    },
+    "system_prompts": {
+      "covers_point": "答案有沒有說出跟這條重點相同的事實？用字可以不同，但內容要一致：講到同一件事卻結論相反、數字或時間不同、地點不同，都算沒涵蓋。重點開頭寫了時間或地點（例如「5 月下午：」「六義園：」）時，答案的時間或地點也要對得上。\n\n- answer = true：答案裡有說法跟這條重點的事實一致，結論、數字、時間、地點都對得上。\n- answer = false：答案沒提到這件事，或提到了但結論相反、數字或時間不同、地點不同。\n\n輸入是一個 JSON：question 是旅客的問題，point 是要檢查的重點，answer 是系統的答案。",
+      "unsupported_claim": "答案裡有沒有標準答案不支持的經驗說法？經驗說法是描述某個地點在某個時間實際是什麼狀況的說法（人潮、排隊、開放、景色、交通狀況等），不論是不是旅客親身經歷的口吻。每條經驗說法都要能在 reference_fragments 或 time_unknown_fragments 裡找到依據：內容一致，地點和時間也要跟該片段對得上。時間看的是片段自己的時間標籤，不是問的時間：答案明說這是另一個時間的經驗、而且跟片段的時間標籤一致，就算有依據。任何一條找不到依據，就是有。建議、一般介紹、說明沒有資料，不是經驗說法。\n\n- answer = true：有：至少一條經驗說法在標準片段和時間不明片段裡都找不到依據，或地點、時間跟依據對不上。\n- answer = false：沒有：每條經驗說法都找得到依據，或答案沒有任何經驗說法。\n\n輸入是一個 JSON：question 是旅客的問題，asked_time 是問的時間，reference_fragments 是標準答案的片段（place 是地點、time 是該片段的時間標籤、text 是內容），time_unknown_fragments 是時間標籤不明的片段，answer 是系統的答案。"
+    },
+    "usage": {
+      "calls": 276,
+      "input_tokens": 643654,
+      "output_tokens": 22888,
+      "cost_usd": 2.0219044999999993,
+      "duration_ms": 625600
+    }
+  },
+  "run": "20261110-191250_strag.json",
+  "run_config": {
+    "system": "strag",
+    "k": null,
+    "retrieval": "fragment",
+    "model": "claude-opus-5-5",
+    "questions": "ptt_v2",
+    "db": "ptt.db",
+    "started_at": "2026-11-10T19:08:59+08:00",
+    "finished_at": "2026-11-10T19:12:50+08:00"
+  },
+  "questions": [
+    {
+      "id": "stay-01",
+      "skipped": false,
+      "coverage": [
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ]
+      ],
+      "unsupported": [
+        1.0
+      ]
+    },
+    {
+      "id": "stay-02",
+      "skipped": false,
+      "coverage": [
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ]
+      ],
+      "unsupported": [
+        1.0
+      ]
+    },
+    {
+      "id": "stay-03",
+      "skipped": false,
+      "coverage": [
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ]
+      ],
+      "unsupported": [
+        0.0
+      ]
+    },
+    {
+      "id": "stay-04",
+      "skipped": false,
+      "coverage": [
+        [
+          1.0
+        ],
+        [
+          1.0
+        ]
+      ],
+      "unsupported": [
+        1.0
+      ]
+    },
+    {
+      "id": "stay-05",
+      "skipped": false,
+      "coverage": [
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ]
+      ],
+      "unsupported": [
+        1.0
+      ]
+    },
+    {
+      "id": "stay-06",
+      "skipped": false,
+      "coverage": [
+        [
+          1.0
+        ],
+        [
+          1.0
+        ]
+      ],
+      "unsupported": [
+        0.0
+      ]
+    },
+    {
+      "id": "stay-07",
+      "skipped": false,
+      "coverage": [
+        [
+          1.0
+        ],
+        [
+          1.0
+        ]
+      ],
+      "unsupported": [
+        1.0
+      ]
+    },
+    {
+      "id": "stay-08",
+      "skipped": false,
+      "coverage": [
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ]
+      ],
+      "unsupported": [
+        0.0
+      ]
+    },
+    {
+      "id": "stay-09",
+      "skipped": false,
+      "coverage": [
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ]
+      ],
+      "unsupported": [
+        0.0
+      ]
+    },
+    {
+      "id": "stay-10",
+      "skipped": false,
+      "coverage": [
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ]
+      ],
+      "unsupported": [
+        0.0
+      ]
+    },
+    {
+      "id": "move-01",
+      "skipped": false,
+      "coverage": [
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ]
+      ],
+      "unsupported": [
+        0.0
+      ]
+    },
+    {
+      "id": "move-02",
+      "skipped": false,
+      "coverage": [
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ]
+      ],
+      "unsupported": [
+        1.0
+      ]
+    },
+    {
+      "id": "move-03",
+      "skipped": false,
+      "coverage": [
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ]
+      ],
+      "unsupported": [
+        0.0
+      ]
+    },
+    {
+      "id": "move-04",
+      "skipped": false,
+      "coverage": [
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ]
+      ],
+      "unsupported": [
+        0.0
+      ]
+    },
+    {
+      "id": "move-05",
+      "skipped": false,
+      "coverage": [
+        [
+          1.0
+        ],
+        [
+          1.0
+        ]
+      ],
+      "unsupported": [
+        0.0
+      ]
+    },
+    {
+      "id": "move-06",
+      "skipped": false,
+      "coverage": [
+        [
+          1.0
+        ],
+        [
+          1.0
+        ]
+      ],
+      "unsupported": [
+        0.0
+      ]
+    },
+    {
+      "id": "move-07",
+      "skipped": false,
+      "coverage": [
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ]
+      ],
+      "unsupported": [
+        1.0
+      ]
+    },
+    {
+      "id": "move-08",
+      "skipped": false,
+      "coverage": [
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ]
+      ],
+      "unsupported": [
+        1.0
+      ]
+    },
+    {
+      "id": "move-09",
+      "skipped": false,
+      "coverage": [
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ]
+      ],
+      "unsupported": [
+        1.0
+      ]
+    },
+    {
+      "id": "move-10",
+      "skipped": false,
+      "coverage": [
+        [
+          1.0
+        ],
+        [
+          1.0
+        ]
+      ],
+      "unsupported": [
+        1.0
+      ]
+    },
+    {
+      "id": "place-01",
+      "skipped": false,
+      "coverage": [
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ]
+      ],
+      "unsupported": [
+        0.0
+      ]
+    },
+    {
+      "id": "place-02",
+      "skipped": false,
+      "coverage": [
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ]
+      ],
+      "unsupported": [
+        0.0
+      ]
+    },
+    {
+      "id": "place-03",
+      "skipped": false,
+      "coverage": [
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ]
+      ],
+      "unsupported": [
+        0.0
+      ]
+    },
+    {
+      "id": "place-04",
+      "skipped": false,
+      "coverage": [
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ]
+      ],
+      "unsupported": [
+        1.0
+      ]
+    },
+    {
+      "id": "place-05",
+      "skipped": false,
+      "coverage": [
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ]
+      ],
+      "unsupported": [
+        0.0
+      ]
+    },
+    {
+      "id": "place-06",
+      "skipped": false,
+      "coverage": [
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ]
+      ],
+      "unsupported": [
+        1.0
+      ]
+    },
+    {
+      "id": "place-07",
+      "skipped": false,
+      "coverage": [
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ]
+      ],
+      "unsupported": [
+        1.0
+      ]
+    },
+    {
+      "id": "place-08",
+      "skipped": false,
+      "coverage": [
+        [
+          1.0
+        ],
+        [
+          1.0
+        ]
+      ],
+      "unsupported": [
+        1.0
+      ]
+    },
+    {
+      "id": "place-09",
+      "skipped": false,
+      "coverage": [
+        [
+          1.0
+        ],
+        [
+          1.0
+        ]
+      ],
+      "unsupported": [
+        0.0
+      ]
+    },
+    {
+      "id": "place-10",
+      "skipped": false,
+      "coverage": [
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ]
+      ],
+      "unsupported": [
+        0.0
+      ]
+    },
+    {
+      "id": "time-01",
+      "skipped": false,
+      "coverage": [
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ]
+      ],
+      "unsupported": [
+        1.0
+      ]
+    },
+    {
+      "id": "time-02",
+      "skipped": false,
+      "coverage": [
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ]
+      ],
+      "unsupported": [
+        1.0
+      ]
+    },
+    {
+      "id": "time-03",
+      "skipped": false,
+      "coverage": [
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ]
+      ],
+      "unsupported": [
+        1.0
+      ]
+    },
+    {
+      "id": "time-04",
+      "skipped": false,
+      "coverage": [
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ]
+      ],
+      "unsupported": [
+        1.0
+      ]
+    },
+    {
+      "id": "time-05",
+      "skipped": false,
+      "coverage": [
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ]
+      ],
+      "unsupported": [
+        1.0
+      ]
+    },
+    {
+      "id": "time-06",
+      "skipped": false,
+      "coverage": [
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ]
+      ],
+      "unsupported": [
+        0.0
+      ]
+    },
+    {
+      "id": "time-07",
+      "skipped": false,
+      "coverage": [
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ]
+      ],
+      "unsupported": [
+        1.0
+      ]
+    },
+    {
+      "id": "time-08",
+      "skipped": false,
+      "coverage": [
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ]
+      ],
+      "unsupported": [
+        1.0
+      ]
+    },
+    {
+      "id": "time-09",
+      "skipped": false,
+      "coverage": [
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ]
+      ],
+      "unsupported": [
+        1.0
+      ]
+    },
+    {
+      "id": "time-10",
+      "skipped": false,
+      "coverage": [
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ]
+      ],
+      "unsupported": [
+        1.0
+      ]
+    },
+    {
+      "id": "cmp-01",
+      "skipped": false,
+      "coverage": [
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ]
+      ],
+      "unsupported": [
+        1.0
+      ]
+    },
+    {
+      "id": "cmp-02",
+      "skipped": false,
+      "coverage": [
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ]
+      ],
+      "unsupported": [
+        1.0
+      ]
+    },
+    {
+      "id": "cmp-03",
+      "skipped": false,
+      "coverage": [
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ]
+      ],
+      "unsupported": [
+        1.0
+      ]
+    },
+    {
+      "id": "cmp-04",
+      "skipped": false,
+      "coverage": [
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ]
+      ],
+      "unsupported": [
+        1.0
+      ]
+    },
+    {
+      "id": "cmp-05",
+      "skipped": false,
+      "coverage": [
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ]
+      ],
+      "unsupported": [
+        1.0
+      ]
+    },
+    {
+      "id": "cmp-06",
+      "skipped": false,
+      "coverage": [
+        [
+          1.0
+        ],
+        [
+          1.0
+        ]
+      ],
+      "unsupported": [
+        0.0
+      ]
+    },
+    {
+      "id": "cmp-07",
+      "skipped": false,
+      "coverage": [
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ]
+      ],
+      "unsupported": [
+        1.0
+      ]
+    },
+    {
+      "id": "cmp-08",
+      "skipped": false,
+      "coverage": [
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ]
+      ],
+      "unsupported": [
+        1.0
+      ]
+    },
+    {
+      "id": "cmp-09",
+      "skipped": false,
+      "coverage": [
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ],
+        [
+          1.0
+        ]
+      ],
+      "unsupported": [
+        0.0
+      ]
+    },
+    {
+      "id": "cmp-10",
+      "skipped": false,
+      "coverage": [
+        [
+          1.0
+        ],
+        [
+          1.0
+        ]
+      ],
+      "unsupported": [
+        1.0
+      ]
+    }
+  ],
+  "disagreements": [],
+  "agreement": {
+    "coverage": 1.0,
+    "unsupported": 1.0
+  }
+}
