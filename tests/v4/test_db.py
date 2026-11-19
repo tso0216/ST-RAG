@@ -3,7 +3,7 @@ import sqlite3
 
 from v4 import db
 
-TABLES = {"article", "place", "place_alias_ja", "place_alias_zh", "place_note", "place_note_time",
+TABLES = {"article", "place", "place_source", "place_alias_ja", "place_alias_zh", "place_note", "place_note_time",
           "day", "day_place", "day_note", "move", "move_time"}
 
 

@@ -18,9 +18,9 @@ from .data_schema import NO_GUESS, NOT_FOUND, Unresolved
 COLUMNS = ("type", "name_zh", "name_ja", "city", "articles", "sentence", "tried", "reason", "answer")
 SKIP = "不收"
 
-OSM = "osm"       # OSM 網址：用這個 OSM 物件
-NAME = "name"     # 日文名稱：用這個名稱查 OSM，取第一筆
-COORD = "coord"   # 座標：OSM 沒有這個地點，直接用這個位置
+OSM = "osm"       # OSM 網址：在本機地圖用來源 id 查這個 OSM 物件
+NAME = "name"     # 日文名稱：用這個名稱在本機地圖模糊搜尋，取第一筆（不問 llm）
+COORD = "coord"   # 座標：地圖上沒有這個地點，直接用這個位置
 EXCLUDE = "skip"  # 不收
 
 _OSM_RE = re.compile(r"openstreetmap\.org/(node|way|relation)/(\d+)")
@@ -38,6 +38,11 @@ class Answer:
     name: str = ""
     lat: float = 0.0
     lon: float = 0.0
+
+    @property
+    def osm_ref(self) -> str:
+        """OSM 網址的答案在本機地圖的來源 id：`way/123`。"""
+        return f"{self.osm_type}/{self.osm_id}"
 
 
 def parse_answer(text: str) -> Answer | None:

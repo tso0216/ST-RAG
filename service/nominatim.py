@@ -1,7 +1,7 @@
 """Nominatim 服務：打公開的 nominatim.openstreetmap.org，回傳原始回應。
 
 `/search` 用名稱查，`/lookup` 用 OSM 物件 id 查。Nominatim 的 HTTP 呼叫只在這裡；
-取哪一筆、寫進 `place` 表都在呼叫的那一邊（`strag_v3.place`、`v4.extract.osm_search`）。
+取哪一筆、寫進 `place` 表都在呼叫的那一邊（`strag_v3.place`）。
 """
 import time
 import urllib.error

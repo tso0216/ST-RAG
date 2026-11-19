@@ -7,7 +7,7 @@ ARTICLE = Article("M.1.A.AAA", "[問題] 東京五天行程", "poster", "2025-12
 
 
 def add_place(conn, osm_id: int, name: str) -> int:
-    return place_table.add(conn, osm_type="way", osm_id=osm_id, kind="景點", name_ja=name, name_zh=name,
+    return place_table.add(conn, source="osm", source_id=f"way/{osm_id}", kind="景點", name_ja=name, name_zh=name,
                            city="東京", lat=35.7, lon=139.7)
 
 

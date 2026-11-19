@@ -3,12 +3,13 @@
 - 整理後的文章：`Article`、`Comment`
 - 兩次 llm 解析的輸出格式：`LINE_SCHEMA`、`NOTE_SCHEMA`，只在這裡定義
 - 解析結果（檢查過、兩次合起來）：`Parsed`，也是 `data/v4_pending/` 存的內容
-- 地點解析：`Candidate`（OSM 的一筆結果）、`Context`（地點在文章裡的上下文）、`Resolution`、`Unresolved`
+- 地點解析：`Candidate`（本機地圖的一筆結果）、`Context`（地點在文章裡的上下文）、`Resolution`、`Unresolved`
 - 執行結果：`Report`
 
 llm 輸出裡「留空」一律是空字串。
 """
 from dataclasses import asdict, dataclass, field
+from pathlib import Path
 
 SPOT = "景點"
 AREA = "區域"
@@ -185,18 +186,34 @@ def _times(items: list[dict]) -> list[TimeTag]:
 
 # ---------- 地點解析 ----------
 
+# 本機地圖的來源
+OSM = "osm"
+OVERTURE = "overture"
+SOURCE_LABELS = {OSM: "OSM", OVERTURE: "Overture"}
+
+# 本機地圖的比對結果，好的在前
+EXACT = "完全相同"
+CONTAINS = "包含"
+FUZZY = "模糊"
+MATCHES = (EXACT, CONTAINS, FUZZY)
+
+
 @dataclass(frozen=True)
 class Candidate:
-    """OSM 查到的一筆結果。"""
-    osm_type: str
-    osm_id: int
+    """本機地圖（OSM＋Overture）查到的一筆地點。"""
+    source: str              # osm／overture
+    source_id: str           # OSM：node/123、way/456、relation/789；Overture：GERS id
     name: str
-    type: str                # OSM 的類型，例如 tourism:attraction、boundary:administrative
+    category: str            # OSM：amenity=restaurant；Overture：categories.primary
+    kind: str                # 景點／區域
+    pref: str                # 都道府縣
+    municipality: str        # 市區町村
     address: str
-    lat: float
+    lat: float               # 代表點
     lon: float
-    kind: str                # 行政區是區域，其他是景點
-    boundary: dict | None    # 區域的範圍（geojson）
+    boundary: dict | None    # 區域的範圍（geojson），其他是 None
+    match: str = ""          # 完全相同／包含／模糊；用來源 id 查到的是空字串
+    similarity: float = 0.0  # 跟查詢名稱的 jaro_winkler_similarity
 
 
 @dataclass(frozen=True)
@@ -252,3 +269,4 @@ class Report:
     unresolved: list[Unresolved] = field(default_factory=list)     # 要使用者決定的地點
     unfinished: list[str] = field(default_factory=list)            # 整批停下時還沒做完的文章 id
     error: str | None = None                                       # 整批停下的原因
+    geocode_log: Path | None = None                                # 這次的地點解析 log 檔

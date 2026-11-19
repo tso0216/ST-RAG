@@ -9,16 +9,22 @@ CREATE TABLE article (
 
 CREATE TABLE place (
     id         INTEGER PRIMARY KEY,
-    osm_type   TEXT    NOT NULL,                  -- node／way／relation；使用者填座標的是 manual
-    osm_id     INTEGER NOT NULL,                  -- manual 的用流水號
     kind       TEXT    NOT NULL CHECK (kind IN ('景點','區域')),
     name_ja    TEXT    NOT NULL,
     name_zh    TEXT,                              -- 第一次抽到的繁中名稱，顯示用
     city       TEXT    NOT NULL DEFAULT '',
     lat        REAL    NOT NULL CHECK (lat BETWEEN -90 AND 90),
     lon        REAL    NOT NULL CHECK (lon BETWEEN -180 AND 180),
-    boundary   TEXT,                              -- 區域的範圍（geojson）
-    UNIQUE (osm_type, osm_id)
+    boundary   TEXT                               -- 區域的範圍（geojson）
+);
+
+-- 地點的來源：osm（node/123、way/456、relation/789）、overture（GERS id）、
+-- gsi（<國土地理院回傳的地址>｜<name_ja>）、manual（使用者填的座標）
+CREATE TABLE place_source (
+    place_id  INTEGER NOT NULL REFERENCES place (id),
+    source    TEXT    NOT NULL CHECK (source IN ('osm','overture','gsi','manual')),
+    source_id TEXT    NOT NULL,
+    UNIQUE (source, source_id)
 );
 
 CREATE TABLE place_alias_ja (

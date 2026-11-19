@@ -12,3 +12,5 @@ src/strag_v3/eval/baseline/chunks.db
 .DS_Store
 .scratch
 docs
+data/geo/
+data/logs/

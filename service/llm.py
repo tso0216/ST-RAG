@@ -1,6 +1,7 @@
 """LLM 服務：送 system/user prompt，取回符合 JSON schema 的結果。
 
 schema 為 None 時不限制輸出格式，回傳純文字。
+tools 給工具名稱（例如 `["WebSearch", "WebFetch"]`）時開這些工具，而且直接執行不用確認；預設不開任何工具。
 
 LLM 呼叫只在這裡，之後要換成 `claude -p` 或正式 API 只改這個檔。
 """
@@ -24,30 +25,36 @@ class Usage:
 
 
 async def call(
-    system: str, user: str, schema: dict | None, model: str, effort: str | None = None
+    system: str, user: str, schema: dict | None, model: str, effort: str | None = None,
+    tools: list[str] | None = None,
 ) -> dict | str:
-    """effort 給值時開 adaptive thinking，effort（low/medium/high/max）決定想多深；None 維持 CLI 預設。"""
-    out, _ = await call_with_usage(system, user, schema, model, effort)
+    """effort 給值時開 adaptive thinking，effort（low/medium/high/max）決定想多深；None 維持 CLI 預設。
+    tools 是要開的工具；沒給或空的時候不開任何工具。"""
+    out, _ = await call_with_usage(system, user, schema, model, effort, tools)
     return out
 
 
 async def call_with_usage(
-    system: str, user: str, schema: dict | None, model: str, effort: str | None = None
+    system: str, user: str, schema: dict | None, model: str, effort: str | None = None,
+    tools: list[str] | None = None,
 ) -> tuple[dict | str, int]:
     """同 `call`，另外回傳這次呼叫的輸入 token 數（含快取讀寫的 token；structured output 多輪時是各輪合計）。"""
-    out, usage = await call_detailed(system, user, schema, model, effort)
+    out, usage = await call_detailed(system, user, schema, model, effort, tools)
     return out, usage.input_tokens
 
 
 async def call_detailed(
-    system: str, user: str, schema: dict | None, model: str, effort: str | None = None
+    system: str, user: str, schema: dict | None, model: str, effort: str | None = None,
+    tools: list[str] | None = None,
 ) -> tuple[dict | str, Usage]:
     """同 `call`，另外回傳這次呼叫的用量（輸入／輸出 token、估計金額、API 時間）。"""
     os.environ.pop("ANTHROPIC_API_KEY", None)  # 走訂閱額度，不走 API 計費
+    tools = list(tools or [])
     options = ClaudeAgentOptions(
         model=model,
         system_prompt=system,
-        tools=[],
+        tools=tools,
+        **({"allowed_tools": tools} if tools else {}),   # 開了的工具直接執行，不用確認
         strict_mcp_config=True,
         setting_sources=[],
         output_format=(
