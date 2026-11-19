@@ -16,10 +16,8 @@ from .data_schema import Context, PlaceRef
 
 # `result` 的值
 DATABASE = "資料庫"
-ANSWER = "答案"
 WEB = "上網"
-WAITING = "等你決定"
-EXCLUDED = "不收"
+DROPPED = "捨棄"
 STOPPED = "中斷"
 
 
@@ -33,10 +31,12 @@ PICKED = "挑中"
 NO_CANDIDATES = "沒有候選"
 NONE_PICKED = "AI 都不選"
 REPEATED = "名稱重複"
+AREA_INVALID = "範圍不能用"
 
-# `fail_reason`：上網查地址失敗的兩種
+# `fail_reason`：捨棄的原因
 WEB_NOT_FOUND = "上網查不到地址"
 GSI_NOT_FOUND = "國土地理院查不到這個地址"
+NO_GUESS = "猜不出來"
 
 
 def maps_url(lat: float, lon: float) -> str:
@@ -69,7 +69,7 @@ class Trace:
             "sentence": p.sentence,
             "same_day": [{"name": n.name, "lat": n.lat, "lon": n.lon} for n in ctx.same_day],
             "result": self.result,
-            "fail_reason": self.fail_reason if self.result in (WAITING, STOPPED) else None,
+            "fail_reason": self.fail_reason if self.result in (DROPPED, STOPPED) else None,
             "rounds": self.rounds,
             "web": self.web,
             "place": self.used,
@@ -113,7 +113,7 @@ def read(path: Path) -> list[dict]:
 class Summary:
     total: int
     results: Counter          # result → 個數
-    fail_reasons: Counter     # 等你決定的原因 → 個數
+    fail_reasons: Counter     # 捨棄的原因 → 個數
     round_failures: Counter   # 本機地圖每一輪失敗的 outcome → 輪數
 
 
@@ -123,12 +123,12 @@ def summarize(path: Path) -> Summary:
     return Summary(
         total=len(records),
         results=Counter(r["result"] for r in records),
-        fail_reasons=Counter(r["fail_reason"] for r in records if r["result"] == WAITING and r["fail_reason"]),
+        fail_reasons=Counter(r["fail_reason"] for r in records if r["result"] == DROPPED and r["fail_reason"]),
         round_failures=Counter(x["outcome"] for r in records for x in r["rounds"] if x["outcome"] != PICKED),
     )
 
 
-_RESULT_ORDER = (DATABASE, ANSWER, *(map_result(i) for i in (1, 2, 3)), WEB, WAITING, EXCLUDED)
+_RESULT_ORDER = (DATABASE, *(map_result(i) for i in (1, 2, 3)), WEB, DROPPED)
 
 
 def summary_lines(path: Path, shown_path: str | None = None) -> list[str]:
@@ -142,6 +142,15 @@ def summary_lines(path: Path, shown_path: str | None = None) -> list[str]:
     return [
         f"地點解析：共 {s.total} 個（log：{shown_path or path}）",
         "  " + join(s.results, _RESULT_ORDER),
-        "  等你決定的原因：" + join(s.fail_reasons, (WEB_NOT_FOUND, GSI_NOT_FOUND)),
+        "  捨棄的原因：" + join(s.fail_reasons, (WEB_NOT_FOUND, GSI_NOT_FOUND, NO_GUESS)),
         "  本機地圖每一輪的失敗：" + join(s.round_failures, (NO_CANDIDATES, NONE_PICKED)),
     ]
+
+
+def dropped_lines(path: Path) -> list[str]:
+    """捨棄的地點，一個一行：`  M.xxx 築地場外市場（築地場外市場）：上網查不到地址`；沒有就是空的。"""
+    records = [r for r in read(path) if r["result"] == DROPPED]
+    if not records:
+        return []
+    return [f"捨棄的地點（{len(records)} 個，用到它的那一天、place_note、move 都沒寫入）：", *(
+        f"  {r['article_id']} {r['name_zh']}（{r['name_ja']}）：{r['fail_reason']}" for r in records)]

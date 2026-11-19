@@ -3,7 +3,8 @@
 - 整理後的文章：`Article`、`Comment`
 - 兩次 llm 解析的輸出格式：`LINE_SCHEMA`、`NOTE_SCHEMA`，只在這裡定義
 - 解析結果（檢查過、兩次合起來）：`Parsed`，也是 `data/v4_pending/` 存的內容
-- 地點解析：`Candidate`（本機地圖的一筆結果）、`Context`（地點在文章裡的上下文）、`Resolution`、`Unresolved`
+- 地點解析：`Candidate`（本機地圖的一筆結果）、`Area`（搜尋範圍）、`Context`（地點在文章裡的上下文）、
+  `Resolution`
 - 執行結果：`Report`
 
 llm 輸出裡「留空」一律是空字串。
@@ -21,11 +22,6 @@ LOCATED_UNKNOWN = "猜不出來"
 LOCATED = (LOCATED_YES, LOCATED_GUESS, LOCATED_UNKNOWN)
 
 DAY_TYPES = ("平日", "假日")
-
-# 要使用者決定的兩種地點
-NOT_FOUND = "解析不到"
-NO_GUESS = "猜不出來"
-
 
 # ---------- 整理後的文章 ----------
 
@@ -213,7 +209,38 @@ class Candidate:
     lon: float
     boundary: dict | None    # 區域的範圍（geojson），其他是 None
     match: str = ""          # 完全相同／包含／模糊；用來源 id 查到的是空字串
-    similarity: float = 0.0  # 跟查詢名稱的 jaro_winkler_similarity
+    similarity: float = 0.0  # 跟查詢名稱的 jaro_winkler_similarity（有好幾個查詢名稱時取最高的）
+
+
+@dataclass(frozen=True)
+class Area:
+    """本機地圖的搜尋範圍，三種其中之一：
+
+    - 行政區：`pref`（都道府縣），可以再加 `municipality`（市區町村）。寫法是地圖裡的寫法（`LocalMap.admin_area` 對過）。
+    - 圓：以 `anchor`（同一天已解析的地點）為中心、半徑 `km` 公里。
+    - 都沒有：全日本。
+    """
+    pref: str = ""
+    municipality: str = ""
+    anchor: str = ""
+    lat: float | None = None
+    lon: float | None = None
+    km: float | None = None
+
+    @property
+    def is_circle(self) -> bool:
+        return self.lat is not None and self.lon is not None and self.km is not None
+
+    def label(self) -> str:
+        """給人和 llm 看的寫法：`東京 新宿区`、`「上野站」方圓 1 公里`、`全日本`。"""
+        if self.is_circle:
+            return f"「{self.anchor}」方圓 {self.km:g} 公里"
+        return " ".join(x for x in (self.pref, self.municipality) if x) or "全日本"
+
+    def to_log(self) -> dict:
+        if self.is_circle:
+            return {"near": self.anchor, "lat": self.lat, "lon": self.lon, "km": self.km}
+        return {k: v for k, v in (("pref", self.pref), ("municipality", self.municipality)) if v}
 
 
 @dataclass(frozen=True)
@@ -228,34 +255,13 @@ class Nearby:
 class Context:
     """一個地點在文章裡的上下文，地點解析時用。"""
     article_id: str
-    in_itinerary: bool = False                       # 是不是行程的一站
-    where: str = ""                                  # 是哪一天的第幾站（`1/31(六) 第 3 站`）
     same_day: list[Nearby] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
-class Unresolved:
-    """要使用者決定的一個地點。"""
-    type: str                # NOT_FOUND（解析不到）／NO_GUESS（猜不出來）
-    article_id: str
-    name_zh: str
-    name_ja: str
-    city: str
-    guessed: bool = False    # `located` 是 `猜的`
-    sentence: str = ""
-    tried: list[str] = field(default_factory=list)   # 試過的日文名稱
-    reason: str = ""         # llm 寫的依據或原因
-    where: str = ""          # 猜不出來：是哪一天的第幾站
-    same_day: list[str] = field(default_factory=list)
-    note: str = ""           # 使用者填的答案用不上時的說明
-
-
-@dataclass(frozen=True)
 class Resolution:
-    """一個地點的解析結果，三種其中之一：有 place、不收入、要使用者決定。"""
+    """一個地點的解析結果：place_id 是 None 就是捨棄（解析不到或猜不出來），寫入時照 `store.write_article` 的規則拿掉。"""
     place_id: int | None = None
-    excluded: bool = False
-    unresolved: Unresolved | None = None
 
 
 # ---------- 執行結果 ----------
@@ -264,9 +270,9 @@ class Resolution:
 class Report:
     written: list[str] = field(default_factory=list)               # 寫入的文章 id
     skipped: list[tuple[str, str]] = field(default_factory=list)   # (檔案或文章 id, 原因)
-    waiting: list[str] = field(default_factory=list)               # 等地點答案的文章 id
-    dropped: int = 0                                               # 不收入的筆數
-    unresolved: list[Unresolved] = field(default_factory=list)     # 要使用者決定的地點
+    dropped: dict[str, int] = field(default_factory=dict)          # 沒寫進資料庫的東西（`store.DROPPED_KINDS`）→ 筆數
     unfinished: list[str] = field(default_factory=list)            # 整批停下時還沒做完的文章 id
     error: str | None = None                                       # 整批停下的原因
     geocode_log: Path | None = None                                # 這次的地點解析 log 檔
+    llm_usage: dict = field(default_factory=dict)                  # 哪一步 → 那一步的 llm 用量（`service.llm.Tally`）
+    seconds: float = 0.0                                           # 整批花的時間

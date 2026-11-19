@@ -5,6 +5,7 @@ from pathlib import Path
 
 import duckdb
 
+from service import llm
 from service.gsi import GsiHit
 from v4.extract import ask_place
 from v4.extract.data_schema import LINE_SCHEMA, NOTE_SCHEMA
@@ -100,17 +101,22 @@ def web(address: str, url: str = "https://example.com/shop") -> dict:
     return {"found": True, "address": address, "source_url": url}
 
 
+USAGE = llm.Usage(input_tokens=1000, output_tokens=50, cost_usd=0.01, cache_read_tokens=600)   # 假的 llm 每次呼叫的用量
+
+
 class FakeLLM:
     """假的 `service.llm.call`：看輸出格式分辨是哪一種呼叫，回固定內容。
 
     每一種可以給：一個值（每次都回它）、一個 list（照順序一次回一個，用完報錯）、
     或一個函式（拿到 user 訊息，回傳值；丟例外就是這次呼叫失敗）。
-    pick 沒給時挑第一筆；pick 的值是 `choice`（0 是都不是）。new_name 的值是 (name_ja, city)。
+    pick 沒給時挑第一筆；pick 的值是 `choice`（0 是都不是）。
+    plan（搜尋計畫）的值用 `plan(...)` 做；沒給時是 `default_plan`：日文名稱一個、範圍是 `<place>` 的城市當都道府縣。
     web（上網查地址）的值是 `{"found", "address", "source_url"}`，沒給時是查不到。
+    每次呼叫用量都記 `USAGE`（跟真的一樣加進 `llm.track()` 開著的合計）。
     """
 
-    def __init__(self, line=None, note=None, pick=1, new_name=("", ""), web=WEB_NOT_FOUND):
-        self.sources = {"line": line, "note": note, "pick": pick, "new_name": new_name, "web": web}
+    def __init__(self, line=None, note=None, pick=1, plan=None, web=WEB_NOT_FOUND):
+        self.sources = {"line": line, "note": note, "pick": pick, "plan": plan or default_plan, "web": web}
         self.calls: list[tuple[str, str]] = []   # (哪一種, user 訊息)
         self.tools: dict[str, list] = {}         # 哪一種 → 最後一次呼叫開的工具
 
@@ -119,9 +125,10 @@ class FakeLLM:
 
     async def __call__(self, system, user, schema, model, effort=None, tools=None):
         kind = {id(LINE_SCHEMA): "line", id(NOTE_SCHEMA): "note", id(ask_place.PICK_SCHEMA): "pick",
-                id(ask_place.NEW_NAME_SCHEMA): "new_name", id(ask_place.WEB_ADDRESS_SCHEMA): "web"}[id(schema)]
+                id(ask_place.PLAN_SCHEMA): "plan", id(ask_place.WEB_ADDRESS_SCHEMA): "web"}[id(schema)]
         self.calls.append((kind, user))
         self.tools[kind] = list(tools or [])
+        llm.record(USAGE)
         source = self.sources[kind]
         if callable(source):
             value = source(user)
@@ -131,9 +138,18 @@ class FakeLLM:
             value = source
         if kind == "pick":
             return {"reason": "", "choice": value}
-        if kind == "new_name":
-            return {"name_ja": value[0], "city": value[1]}
         return json.loads(json.dumps(value))   # 每次給一份新的，呼叫的人改了也不影響下一次
+
+
+def plan(*names, pref="", municipality="", near=0, km=0, reason="") -> dict:
+    """llm 的搜尋計畫。"""
+    return {"reason": reason, "names": list(names), "pref": pref, "municipality": municipality, "near": near, "km": km}
+
+
+def default_plan(user: str) -> dict:
+    """沒指定時的搜尋計畫：`<place>` 的日文名稱，範圍是它的城市（當都道府縣；城市不明就是全日本）。"""
+    _, name_ja, city, _ = user.split("<place>")[1].split("</place>")[0].split("｜")
+    return plan(name_ja, pref="" if city == "城市不明" else city)
 
 
 def place(ref, name_zh, name_ja, city="東京", kind="景點", located="是", reason="", sentence=None) -> dict:

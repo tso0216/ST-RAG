@@ -1,12 +1,16 @@
-"""地點解析：一個地點從「找得到嗎」到有結果，或本機地圖三輪都沒有、上網查地址也沒有。"""
+"""地點解析：一個地點從「找得到嗎」到有結果，或本機地圖三輪都沒有、上網查地址也沒有。
+
+本機地圖的查詢記成（名稱用「、」接起來, 範圍, 排序用的城市）。
+"""
 import asyncio
 
 import pytest
 
-from tests.v4.extract.fakes import FakeGsi, KING_ASAKUSA, SENSOJI, SKYTREE, web
+from tests.v4.extract.fakes import FakeGsi, KING_ASAKUSA, SENSOJI, SKYTREE, plan, web
 from v4 import place as place_table
-from v4.extract import unresolved
-from v4.extract.data_schema import NO_GUESS, NOT_FOUND, Context, Day, Nearby, Parsed, PlaceNote, PlaceRef, Unresolved
+from v4.extract import config
+from v4.extract import geocode_log as glog
+from v4.extract.data_schema import Context, Day, Nearby, Parsed, PlaceNote, PlaceRef
 from v4.extract.geocoding import Geocoder
 
 ARTICLE = "M.1.A.AAA"
@@ -16,39 +20,42 @@ def ref(name_zh, name_ja, city="東京", located="是", ref="p1", kind="景點",
     return PlaceRef(ref, name_zh, name_ja, city, kind, located, reason, sentence=f"去{name_zh}")
 
 
-def answers(*rows: dict) -> unresolved.Answers:
-    blank = dict.fromkeys(unresolved.COLUMNS, "")
-    return unresolved.Answers([{**blank, **r} for r in rows])
-
-
 class Spy:
     """記下本機地圖的每一次查詢，其他照原本的做。"""
 
     def __init__(self, local_map):
         self.map = local_map
         self.searches: list[tuple[str, str]] = []
-        self.lookups: list[tuple[str, str]] = []
 
-    def search(self, name, city=""):
-        self.searches.append((name, city))
-        return self.map.search(name, city)
+    def search(self, names, area=None):
+        names = [names] if isinstance(names, str) else names
+        self.searches.append(("、".join(names), area.label() if area else "全日本"))
+        return self.map.search(names, area)
 
-    def lookup(self, source, source_id):
-        self.lookups.append((source, source_id))
-        return self.map.lookup(source, source_id)
+    def admin_area(self, pref="", municipality=""):
+        return self.map.admin_area(pref, municipality)
 
 
 @pytest.fixture
 def setup(conn, local_map, use_llm):
     """回傳函式：建一個 Geocoder，連同記錄查詢的本機地圖、假的國土地理院、假的 llm 一起回傳。"""
-    def build(answer_rows=(), gsi=None, **llm):
+    def build(gsi=None, **llm):
         spy, gsi = Spy(local_map), gsi or FakeGsi()
-        return Geocoder(conn, spy, answers(*answer_rows), gsi=gsi), spy, use_llm(**llm), gsi
+        return Geocoder(conn, spy, gsi=gsi), spy, use_llm(**llm), gsi
     return build
 
 
-def resolve(geocoder, p, in_itinerary=True, **ctx):
-    return asyncio.run(geocoder.resolve(p, Context(ARTICLE, in_itinerary=in_itinerary, **ctx)))
+def resolve(geocoder, p, **ctx):
+    return asyncio.run(geocoder.resolve(p, Context(ARTICLE, **ctx)))
+
+
+def dropped(geocoder, p) -> str:
+    """解析一個地點，確定被捨棄，回傳 log 記的原因。"""
+    traces: list[glog.Trace] = []
+    r = asyncio.run(geocoder.resolve(p, Context(ARTICLE), on_done=traces.append))
+    [trace] = traces
+    assert r.place_id is None and trace.result == glog.DROPPED
+    return trace.fail_reason
 
 
 def aliases(conn, table) -> list[tuple]:
@@ -82,7 +89,7 @@ def test_several_database_matches_fall_through_to_the_map(conn, setup):
 
     r = resolve(geocoder, ref("清水寺", "清水寺", city="京都"))
 
-    assert spy.searches == [("清水寺", "京都")]
+    assert spy.searches == [("清水寺", "京都府")]
     assert source(conn, r.place_id) == ("osm", "way/21")
 
 
@@ -93,8 +100,136 @@ def test_same_name_in_another_city_is_not_a_database_match(conn, setup):
 
     r = resolve(geocoder, ref("清水寺", "清水寺", city="東京"))
 
-    assert spy.searches == [("清水寺", "東京")]
-    assert source(conn, r.place_id) == ("osm", "way/22")   # 同城市的排第一
+    assert spy.searches == [("清水寺", "東京都")]
+    assert source(conn, r.place_id) == ("osm", "way/22")
+
+
+# ---------- 搜尋計畫 ----------
+
+def test_plan_is_asked_with_the_place_and_numbered_same_day_places(conn, setup):
+    geocoder, spy, llm, gsi = setup(pick=1)
+
+    resolve(geocoder, ref("淺草寺", "浅草寺"), same_day=[Nearby("晴空塔", SKYTREE.lat, SKYTREE.lon), Nearby("還沒解析")])
+
+    [user] = llm.users("plan")
+    assert "<place>淺草寺｜浅草寺｜東京｜景點</place>" in user and "<sentence>去淺草寺</sentence>" in user
+    assert "1. 晴空塔（35.7101, 139.8107）" in user and "2. 還沒解析（還沒定位，不能當中心）" in user
+    assert "<history>" not in user and "<error>" not in user
+    assert llm.tools["plan"] == []
+
+
+def test_several_names_and_a_municipality(conn, setup):
+    geocoder, spy, llm, gsi = setup(pick=1, plan=[plan("せんそうじ", "浅草寺", pref="東京", municipality="台東区")])
+
+    r = resolve(geocoder, ref("淺草寺", "せんそうじ"))
+
+    assert spy.searches == [("せんそうじ、浅草寺", "東京都 台東区")]
+    assert source(conn, r.place_id) == ("osm", SENSOJI.source_id)
+    assert "<area>東京都 台東区</area>" in llm.users("pick")[0]
+
+
+def test_area_the_map_does_not_know_is_sent_back_to_the_llm(conn, setup):
+    geocoder, spy, llm, gsi = setup(pick=1, plan=[plan("浅草寺", pref="大坂"), plan("浅草寺", pref="東京")])
+
+    r = resolve(geocoder, ref("淺草寺", "浅草寺"))
+
+    first, second = llm.users("plan")
+    assert "<error>" not in first and "<error>沒有「大坂」這個都道府縣" in second
+    assert spy.searches == [("浅草寺", "東京都")]
+    assert source(conn, r.place_id) == ("osm", SENSOJI.source_id)
+
+
+def test_area_still_unusable_after_retries_skips_the_round(conn, setup, monkeypatch):
+    monkeypatch.setattr(config, "RETRIES", 1)
+    geocoder, spy, llm, gsi = setup(pick=1, plan=[plan("浅草寺", pref="大坂"), plan("浅草寺", pref="大坂"),
+                                                  plan("浅草寺", pref="東京")])
+
+    r = resolve(geocoder, ref("淺草寺", "浅草寺"))
+
+    assert spy.searches == [("浅草寺", "東京都")]
+    assert "第 1 輪：名稱 浅草寺｜範圍 {'pref': '大坂'}｜範圍不能用：沒有「大坂」" in llm.users("plan")[2]
+    assert source(conn, r.place_id) == ("osm", SENSOJI.source_id)
+
+
+def test_circle_around_a_same_day_place(conn, setup):
+    geocoder, spy, llm, gsi = setup(pick=1, plan=[plan("焼肉きんぐ", near=1, km=1)])
+    same_day = [Nearby("淺草寺", SENSOJI.lat, SENSOJI.lon)]
+
+    r = resolve(geocoder, ref("燒肉 KING", "焼肉きんぐ", located="猜的"), same_day=same_day)
+
+    # 新宿店在 9 公里外，不在範圍內
+    assert spy.searches == [("焼肉きんぐ", "「淺草寺」方圓 1 公里")]
+    assert source(conn, r.place_id) == ("overture", KING_ASAKUSA.source_id)
+    [user] = llm.users("pick")
+    assert "<area>「淺草寺」方圓 1 公里</area>" in user and "離中心「淺草寺」0.4 公里" in user
+
+
+@pytest.mark.parametrize("given, used", [(0, 0.3), (0.1, 0.3), (2, 2), (50, 10)])
+def test_circle_radius_is_kept_within_the_setting(conn, setup, given, used):
+    geocoder, spy, llm, gsi = setup(pick=0, plan=[plan("どこか", near=1, km=given)] * 3)
+
+    resolve(geocoder, ref("某處", "どこか"), same_day=[Nearby("淺草寺", SENSOJI.lat, SENSOJI.lon)])
+
+    assert spy.searches[0][1] == f"「淺草寺」方圓 {used:g} 公里"
+
+
+@pytest.mark.parametrize("near, message", [
+    (3, "near 要是 <same_day> 裡的編號（1～2）"),
+    (2, "「還沒解析」還沒定位，不能當中心"),
+])
+def test_circle_needs_a_same_day_place_that_is_already_located(conn, setup, near, message):
+    geocoder, spy, llm, gsi = setup(pick=1, plan=[plan("浅草寺", near=near, km=1), plan("浅草寺", pref="東京")])
+
+    resolve(geocoder, ref("淺草寺", "浅草寺"), same_day=[Nearby("晴空塔", SKYTREE.lat, SKYTREE.lon), Nearby("還沒解析")])
+
+    assert message in llm.users("plan")[1]
+    assert spy.searches == [("浅草寺", "東京都")]
+
+
+def test_plan_without_names_is_sent_back(conn, setup):
+    geocoder, spy, llm, gsi = setup(pick=1, plan=[plan(" ", pref="東京"), plan("浅草寺", pref="東京")])
+
+    resolve(geocoder, ref("淺草寺", "浅草寺"))
+
+    assert "names 至少要給一個日文名稱" in llm.users("plan")[1]
+
+
+# ---------- 自動放寬 ----------
+
+def test_municipality_without_the_same_name_widens_to_the_prefecture(conn, setup):
+    geocoder, spy, llm, gsi = setup(pick=1, plan=[plan("浅草寺", pref="東京", municipality="墨田区")])
+
+    r = resolve(geocoder, ref("淺草寺", "浅草寺"))
+
+    assert spy.searches == [("浅草寺", "東京都 墨田区"), ("浅草寺", "東京都")]
+    assert source(conn, r.place_id) == ("osm", SENSOJI.source_id)
+    assert "<area>東京都（原本是 東京都 墨田区，裡面沒有同名的，自動放寬）</area>" in llm.users("pick")[0]
+
+
+def test_circle_without_the_same_name_widens_its_radius(conn, setup):
+    geocoder, spy, llm, gsi = setup(pick=1, plan=[plan("焼肉きんぐ", near=1, km=0.3)])
+
+    resolve(geocoder, ref("燒肉 KING", "焼肉きんぐ", located="猜的"), same_day=[Nearby("淺草寺", SENSOJI.lat, SENSOJI.lon)])
+
+    assert [area for _, area in spy.searches] == ["「淺草寺」方圓 0.3 公里", "「淺草寺」方圓 0.9 公里"]
+
+
+def test_prefecture_is_not_widened(conn, setup):
+    geocoder, spy, llm, gsi = setup(pick=1)
+
+    resolve(geocoder, ref("築地場外市場", "築地場外市場"))
+
+    assert spy.searches == [("築地場外市場", "東京都")]
+
+
+def test_widened_area_without_the_same_name_keeps_the_original_results(conn, setup):
+    # 墨田区裡「浅草寺院」只有模糊的（東京ソラマチ不像），放寬到東京都也只有模糊的：用原本範圍的結果
+    geocoder, spy, llm, gsi = setup(pick=0, plan=[plan("浅草寺院", pref="東京", municipality="台東区")] * 3)
+
+    resolve(geocoder, ref("淺草寺院", "浅草寺院"))
+
+    assert spy.searches[:2] == [("浅草寺院", "東京都 台東区"), ("浅草寺院", "東京都")]
+    assert "<area>東京都 台東区</area>" in llm.users("pick")[0]
 
 
 # ---------- 本機地圖和 llm ----------
@@ -112,18 +247,20 @@ def test_found_in_round_one_is_added_with_its_source_and_aliases(conn, setup):
     assert aliases(conn, "place_alias_ja") == [(p.id, "スカイツリー")]
     [user] = llm.users("pick")
     assert "晴空塔｜スカイツリー｜東京｜景點" in user and "去晴空塔" in user
-    assert "1. 東京スカイツリー｜OSM｜tourism=attraction｜東京都 墨田区" in user
+    assert "1. 東京スカイツリー｜OSM｜tourism=attraction｜東京都 墨田区｜35.7101, 139.8107｜300 公尺內其他候選 0 筆" in user
     assert gsi.queries == [] and llm.users("web") == []
 
 
-def test_candidates_show_source_category_address_and_distance(conn, setup):
+def test_candidates_show_coordinates_distances_and_how_many_others_are_nearby(conn, setup):
     geocoder, spy, llm, gsi = setup(pick=2)
 
     r = resolve(geocoder, ref("淺草寺", "浅草寺"), same_day=[Nearby("晴空塔", SKYTREE.lat, SKYTREE.lon)])
 
     user = llm.users("pick")[0]
-    assert "1. 浅草寺｜OSM｜amenity=place_of_worship｜東京都 台東区 浅草2-3-1｜離同一天的「晴空塔」約 1.4 公里" in user
-    assert "2. 浅草寺｜Overture｜buddhist_temple｜東京都 台東区 東京都台東区浅草2-3-1｜離同一天的「晴空塔」約 1.4 公里" in user
+    assert ("1. 浅草寺｜OSM｜amenity=place_of_worship｜東京都 台東区 浅草2-3-1｜35.7148, 139.7967｜"
+            "離同一天的「晴空塔」約 1.4 公里｜300 公尺內其他候選 1 筆") in user
+    assert ("2. 浅草寺｜Overture｜buddhist_temple｜東京都 台東区 東京都台東区浅草2-3-1｜35.7148, 139.7966｜"
+            "離同一天的「晴空塔」約 1.4 公里｜300 公尺內其他候選 1 筆") in user
     # 兩份地圖的同一個地方，挑哪一筆都可以：挑了 Overture 那一筆
     assert source(conn, r.place_id) == ("overture", "ovt-sensoji")
 
@@ -152,64 +289,63 @@ def test_same_map_object_written_twice_is_one_row(conn, setup):
     assert aliases(conn, "place_alias_ja") == [(pid, "スカイツリー")]
 
 
-def test_found_in_round_two_after_the_llm_gives_another_name(conn, setup):
-    geocoder, spy, llm, gsi = setup(pick=1, new_name=[("東京ソラマチ", "東京")])
+def test_found_in_round_two_with_the_next_plan(conn, setup):
+    geocoder, spy, llm, gsi = setup(pick=1, plan=[plan("ソラマチのお店", pref="東京"), plan("東京ソラマチ", pref="東京")])
 
     r = resolve(geocoder, ref("晴空街道的某間店", "ソラマチのお店"))
 
-    assert spy.searches == [("ソラマチのお店", "東京"), ("東京ソラマチ", "東京")]
-    [user] = llm.users("new_name")
-    assert "<tried>ソラマチのお店</tried>" in user and "<last>沒有結果</last>" in user
+    assert spy.searches == [("ソラマチのお店", "東京都"), ("東京ソラマチ", "東京都")]
+    second = llm.users("plan")[1]
+    assert "<history>\n第 1 輪：名稱 ソラマチのお店｜範圍 東京都｜沒有候選\n</history>" in second
     p = place_table.get(conn, r.place_id)
     assert p.name_ja == "東京ソラマチ"
+    # 只加抽取時的日文名稱；llm 列的其他寫法可能很籠統，不加成別名
     assert aliases(conn, "place_alias_zh") == [(p.id, "晴空街道的某間店")]
-    assert aliases(conn, "place_alias_ja") == [(p.id, "ソラマチのお店"), (p.id, "東京ソラマチ")]
+    assert aliases(conn, "place_alias_ja") == [(p.id, "ソラマチのお店")]
 
 
-def test_llm_provides_another_name_when_none_of_the_candidates_is_right(conn, setup):
-    geocoder, spy, llm, gsi = setup(pick=[0, 1], new_name=[("浅草寺", "東京")])
+def test_next_plan_sees_why_none_of_the_candidates_was_picked(conn, setup, use_llm):
+    geocoder, spy, llm, gsi = setup(pick=[0, 1], plan=[plan("清水寺", pref="東京"), plan("浅草寺", pref="東京")])
 
     r = resolve(geocoder, ref("淺草的清水寺", "清水寺"))
 
-    assert "<last>有結果，但都不是這個地點</last>" in llm.users("new_name")[0]
+    assert "第 1 輪：名稱 清水寺｜範圍 東京都｜1 筆候選，AI 都不選：" in llm.users("plan")[1]
     assert source(conn, r.place_id) == ("osm", SENSOJI.source_id)
 
 
 def test_out_of_range_choice_counts_as_none(conn, setup):
-    geocoder, spy, llm, gsi = setup(pick=[9, 1], new_name=[("スカイツリー", "東京")])
+    geocoder, spy, llm, gsi = setup(pick=[9, 1], plan=[plan("浅草寺", pref="東京"), plan("スカイツリー", pref="東京")])
 
     r = resolve(geocoder, ref("淺草寺", "浅草寺"))
 
-    assert spy.searches == [("浅草寺", "東京"), ("スカイツリー", "東京")]
+    assert spy.searches == [("浅草寺", "東京都"), ("スカイツリー", "東京都")]
     assert source(conn, r.place_id) == ("osm", SKYTREE.source_id)
 
 
-def test_a_name_already_tried_is_not_searched_again(conn, setup):
-    geocoder, spy, llm, gsi = setup(new_name=[("築地場外市場", "東京"), ("", "")])
+def test_same_names_and_area_are_not_searched_again(conn, setup):
+    geocoder, spy, llm, gsi = setup(plan=[plan("築地場外市場", pref="東京"), plan("築地場外市場", pref="東京都"),
+                                          plan(" 築地場外市場", pref="東京")])
 
     r = resolve(geocoder, ref("築地場外市場", "築地場外市場"))
 
-    assert spy.searches == [("築地場外市場", "東京")]
-    assert r.unresolved.tried == ["築地場外市場"]
+    assert spy.searches == [("築地場外市場", "東京都")]
+    assert "第 2 輪：名稱 築地場外市場｜範圍 東京都｜跟之前的名稱和範圍一樣，沒有查" in llm.users("plan")[2]
+    assert r.place_id is None and "<tried>築地場外市場</tried>" in llm.users("web")[0]
 
 
 # ---------- 三輪都沒有：上網查地址 ----------
 
-def test_three_rounds_without_a_result_then_web_finds_nothing(conn, setup):
-    geocoder, spy, llm, gsi = setup(new_name=[("築地市場", "東京"), ("築地", "")])
+def test_three_rounds_without_a_result_then_web_finds_nothing_so_it_is_dropped(conn, setup):
+    geocoder, spy, llm, gsi = setup(plan=[plan("築地場外市場", pref="東京"), plan("築地市場", "築地場外", pref="東京"),
+                                          plan("築地")])
 
-    r = resolve(geocoder, ref("築地場外市場", "築地場外市場"), where="D1 第 1 站")
-
-    assert r.place_id is None and not r.excluded
-    assert r.unresolved == Unresolved(
-        NOT_FOUND, ARTICLE, "築地場外市場", "築地場外市場", "東京", guessed=False, sentence="去築地場外市場",
-        tried=["築地場外市場", "築地市場", "築地"], reason="", where="D1 第 1 站")
-    assert spy.searches == [("築地場外市場", "東京"), ("築地市場", "東京"), ("築地", "")]
-    assert len(llm.users("new_name")) == 2
+    assert dropped(geocoder, ref("築地場外市場", "築地場外市場")) == glog.WEB_NOT_FOUND
+    assert spy.searches == [("築地場外市場", "東京都"), ("築地市場、築地場外", "東京都"), ("築地", "全日本")]
+    assert len(llm.users("plan")) == 3
     [user] = llm.users("web")
     assert "<place>築地場外市場｜築地場外市場｜東京｜景點</place>" in user
-    assert "<tried>築地場外市場、築地市場、築地</tried>" in user
-    assert llm.tools["web"] == ["WebSearch", "WebFetch"] and llm.tools["new_name"] == []
+    assert "<tried>築地場外市場、築地市場、築地場外、築地</tried>" in user
+    assert llm.tools["web"] == ["WebSearch", "WebFetch"] and llm.tools["plan"] == []
     assert gsi.queries == []
     assert conn.execute("SELECT COUNT(*) FROM place").fetchone() == (0,)
 
@@ -231,20 +367,15 @@ def test_web_address_is_turned_into_coordinates_by_gsi(conn, setup):
 def test_found_true_with_an_empty_address_counts_as_not_found(conn, setup):
     geocoder, spy, llm, gsi = setup(web={"found": True, "address": " ", "source_url": ""})
 
-    r = resolve(geocoder, ref("築地場外市場", "築地場外市場"))
+    assert dropped(geocoder, ref("築地場外市場", "築地場外市場")) == glog.WEB_NOT_FOUND
+    assert gsi.queries == []
 
-    assert r.unresolved is not None and gsi.queries == []
 
-
-def test_address_gsi_cannot_find_is_left_for_the_user_with_the_address_in_the_note(conn, setup):
+def test_address_gsi_cannot_find_is_dropped(conn, setup):
     geocoder, spy, llm, gsi = setup(web=web("東京都中央区築地9-99", "https://example.com/tsukiji"))
 
-    r = resolve(geocoder, ref("築地場外市場", "築地場外市場"))
-
+    assert dropped(geocoder, ref("築地場外市場", "築地場外市場")) == glog.GSI_NOT_FOUND
     assert gsi.queries == ["東京都中央区築地9-99"]
-    assert r.unresolved.type == NOT_FOUND and r.unresolved.tried == ["築地場外市場"]
-    assert "東京都中央区築地9-99" in r.unresolved.note and "https://example.com/tsukiji" in r.unresolved.note
-    assert "國土地理院查不到這個地址" in r.unresolved.note
 
 
 def test_same_gsi_address_with_different_names_is_two_places(conn, setup):
@@ -279,7 +410,7 @@ def test_guessed_branch_is_not_looked_up_by_its_chinese_name(conn, setup):
 
     r = resolve(geocoder, ref("燒肉 KING", "焼肉きんぐ", located="猜的"))
 
-    assert spy.searches == [("焼肉きんぐ", "東京")]
+    assert spy.searches == [("焼肉きんぐ", "東京都")]
     assert r.place_id != asakusa
 
 
@@ -290,10 +421,11 @@ def test_guessed_branch_is_resolved_after_the_others_and_shown_how_far_it_is(con
                 ref("沒人提到的地方", "どこか", ref="p3")],
         days=[Day("D1", "2", ["p1", "p2"])], place_notes=[], moves=[], day_notes=[])
 
-    place_ids, undecided = asyncio.run(geocoder.resolve_article(ARTICLE, parsed))
+    place_ids = asyncio.run(geocoder.resolve_article(ARTICLE, parsed))
 
-    assert undecided == [] and set(place_ids) == {"p1", "p2"}
-    assert spy.searches == [("浅草寺", "東京"), ("焼肉きんぐ", "東京")]
+    assert set(place_ids) == {"p1", "p2"} and all(place_ids.values())
+    assert spy.searches == [("浅草寺", "東京都"), ("焼肉きんぐ", "東京都")]
+    assert "1. 淺草寺（35.7148, 139.7967）" in llm.users("plan")[1]
     king = llm.users("pick")[1]
     assert "<same_day>淺草寺</same_day>" in king
     assert "焼肉きんぐ 浅草店" in king and "離同一天的「淺草寺」約 0.4 公里" in king
@@ -302,104 +434,13 @@ def test_guessed_branch_is_resolved_after_the_others_and_shown_how_far_it_is(con
 
 # ---------- 猜不出來 ----------
 
-def test_place_that_cannot_be_guessed_and_is_not_a_stop_is_left_out(conn, setup):
+@pytest.mark.parametrize("p", [ref("餐廳", "レストラン", located="猜不出來"),
+                               ref("飯店", "ホテル", located="猜不出來", reason="沒寫是哪一間")])
+def test_place_that_cannot_be_guessed_is_dropped_without_searching(conn, setup, p):
     geocoder, spy, llm, gsi = setup()
 
-    r = resolve(geocoder, ref("餐廳", "レストラン", located="猜不出來"), in_itinerary=False)
-
-    assert r.excluded and r.unresolved is None
+    assert dropped(geocoder, p) == glog.NO_GUESS
     assert spy.searches == [] and llm.calls == []
-
-
-def test_place_that_cannot_be_guessed_and_is_a_stop_is_left_for_the_user(conn, setup):
-    geocoder, spy, llm, gsi = setup()
-
-    r = resolve(geocoder, ref("飯店", "ホテル", located="猜不出來", reason="沒寫是哪一間"), where="D1 第 3 站")
-
-    assert r.unresolved.type == NO_GUESS
-    assert (r.unresolved.name_zh, r.unresolved.reason, r.unresolved.where) == ("飯店", "沒寫是哪一間", "D1 第 3 站")
-    assert spy.searches == [] and llm.calls == []
-
-
-def test_answer_for_place_that_cannot_be_guessed_is_used_without_aliasing_its_generic_name(conn, setup):
-    rows = [{"type": "猜不出來", "name_zh": "飯店", "articles": ARTICLE, "answer": "東京スカイツリー"},
-            {"type": "猜不出來", "name_zh": "飯店", "articles": "M.2.A.BBB", "answer": "不收"}]
-    geocoder, spy, llm, gsi = setup(rows)
-
-    r = resolve(geocoder, ref("飯店", "ホテル", located="猜不出來"))
-
-    p = place_table.get(conn, r.place_id)
-    assert (source(conn, p.id), p.name_zh) == (("osm", SKYTREE.source_id), None)
-    assert aliases(conn, "place_alias_zh") == []
-    assert aliases(conn, "place_alias_ja") == [(p.id, "東京スカイツリー")]
-    assert llm.calls == []
-
-
-# ---------- 使用者填的答案 ----------
-
-def not_found_row(answer, name_zh="築地場外市場", city="東京") -> dict:
-    return {"type": "解析不到", "name_zh": name_zh, "city": city, "articles": "M.9.A.ZZZ", "answer": answer}
-
-
-def test_answer_with_osm_url_is_looked_up_in_the_local_map(conn, setup):
-    geocoder, spy, llm, gsi = setup([not_found_row("https://www.openstreetmap.org/way/3")])
-
-    r = resolve(geocoder, ref("築地場外市場", "築地場外市場"))
-
-    assert spy.lookups == [("osm", "way/3")] and spy.searches == [] and llm.calls == []
-    p = place_table.get(conn, r.place_id)
-    assert (source(conn, p.id), p.name_zh) == (("osm", "way/3"), "築地場外市場")
-    assert aliases(conn, "place_alias_zh") == [(p.id, "築地場外市場")]
-
-
-def test_answer_with_japanese_name_takes_the_first_fuzzy_search_result(conn, setup):
-    geocoder, spy, llm, gsi = setup([not_found_row("清水寺")])
-
-    r = resolve(geocoder, ref("築地場外市場", "築地場外市場"))
-
-    assert spy.searches == [("清水寺", "東京")] and llm.calls == []
-    p = place_table.get(conn, r.place_id)
-    assert source(conn, p.id) == ("osm", "way/22")   # 同城市的排第一
-    assert aliases(conn, "place_alias_ja") == [(p.id, "清水寺"), (p.id, "築地場外市場")]
-
-
-def test_answer_with_coordinates_adds_a_manual_place(conn, setup):
-    geocoder, spy, llm, gsi = setup([not_found_row("35.6655, 139.7707")])
-
-    r = resolve(geocoder, ref("築地場外市場", "築地場外市場"))
-
-    p = place_table.get(conn, r.place_id)
-    assert source(conn, p.id) == ("manual", "35.6655,139.7707") and p.kind == "景點"
-    assert (p.name_ja, p.name_zh, p.lat, p.lon) == ("築地場外市場", "築地場外市場", 35.6655, 139.7707)
-    assert spy.searches == [] and spy.lookups == []
-    # 之後別篇出現同樣的寫法，資料庫就查得到
-    assert resolve(geocoder, ref("築地場外市場", "別的日文寫法")).place_id == p.id
-
-
-def test_answer_to_skip_leaves_the_place_out(conn, setup):
-    geocoder, spy, llm, gsi = setup([not_found_row("不收")])
-
-    r = resolve(geocoder, ref("築地場外市場", "築地場外市場"))
-
-    assert r.excluded and r.place_id is None and r.unresolved is None
-
-
-@pytest.mark.parametrize("answer", ["沒有這個名字", "https://www.openstreetmap.org/way/999"])
-def test_answer_that_the_local_map_cannot_find_is_reported_again(conn, setup, answer):
-    geocoder, spy, llm, gsi = setup([not_found_row(answer)])
-
-    r = resolve(geocoder, ref("築地場外市場", "築地場外市場"))
-
-    assert r.unresolved.type == NOT_FOUND
-    assert f"填的答案「{answer}」在本機地圖查不到，請改填座標" in r.unresolved.note
-
-
-def test_answer_does_not_apply_to_a_different_city(conn, setup):
-    geocoder, spy, llm, gsi = setup([not_found_row("不收", city="大阪")], pick=0)
-
-    r = resolve(geocoder, ref("築地場外市場", "築地場外市場"))
-
-    assert r.unresolved is not None and spy.searches[0] == ("築地場外市場", "東京")
 
 
 # ---------- 一篇文章 ----------
@@ -413,9 +454,7 @@ def test_only_places_used_by_the_itinerary_notes_or_moves_are_resolved(conn, set
         days=[Day("D1", "2", ["p1", "p5"])],
         place_notes=[PlaceNote("p2", "晚上很美", [])], moves=[], day_notes=[])
 
-    place_ids, undecided = asyncio.run(geocoder.resolve_article(ARTICLE, parsed))
+    place_ids = asyncio.run(geocoder.resolve_article(ARTICLE, parsed))
 
-    assert spy.searches == [("浅草寺", "東京"), ("スカイツリー", "東京")]
-    assert set(place_ids) == {"p1", "p2"} and all(place_ids.values())
-    [hotel] = undecided
-    assert (hotel.type, hotel.name_zh, hotel.where, hotel.same_day) == (NO_GUESS, "飯店", "D1 第 2 站", ["淺草寺"])
+    assert spy.searches == [("浅草寺", "東京都"), ("スカイツリー", "東京都")]
+    assert set(place_ids) == {"p1", "p2", "p5"} and place_ids["p1"] and place_ids["p2"] and place_ids["p5"] is None

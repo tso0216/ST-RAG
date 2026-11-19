@@ -32,7 +32,7 @@ def test_article_is_written_with_its_days_stops_notes_and_moves(conn):
         moves=[Move("p1", "p2", "走過去 20 分鐘", [TimeTag(time="18-19")])],
         day_notes=[DayNote("D1", "這天排太趕"), DayNote("", "整趟都在東京東邊")])
 
-    assert store.write_article(conn, ARTICLE, p, {"p1": a, "p2": b}) == 0
+    assert store.write_article(conn, ARTICLE, p, {"p1": a, "p2": b}) == {}
 
     assert rows(conn, "SELECT id, title, posted_at FROM article") == [
         ("M.1.A.AAA", "[問題] 東京五天行程", "2025-12-29T21:09:16")]
@@ -61,31 +61,24 @@ def test_blank_fields_are_stored_as_null_and_an_all_blank_time_is_not_written(co
     assert rows(conn, "SELECT * FROM place_note_time") == [] and rows(conn, "SELECT * FROM move_time") == []
 
 
-def test_stop_left_out_is_skipped_and_seq_keeps_its_position_in_the_article(conn):
+def test_day_with_a_dropped_stop_is_not_written_and_neither_are_its_notes(conn):
     a, c = add_place(conn, 1, "浅草寺"), add_place(conn, 3, "上野")
-    p = parsed(places=[ref(1, "淺草寺"), ref(2, "餐廳"), ref(3, "上野")], days=[Day("D1", "", ["p1", "p2", "p3"])])
+    p = parsed(places=[ref(1, "淺草寺"), ref(2, "餐廳"), ref(3, "上野")],
+               days=[Day("D1", "", ["p1", "p2", "p3"]), Day("D2", "", ["p1", "p3"]), Day("D3", "", [])],
+               place_notes=[PlaceNote("p1", "人很多", [])],
+               day_notes=[DayNote("D1", "這天很趕"), DayNote("D2", "這天去淺草"),
+                          DayNote("D3", "這天還沒排"), DayNote("", "整趟的建議")])
 
     dropped = store.write_article(conn, ARTICLE, p, {"p1": a, "p2": None, "p3": c})
 
-    assert rows(conn, "SELECT seq, poi_id FROM day_place ORDER BY seq") == [(1, a), (3, c)]
-    assert dropped == 1
-
-
-def test_day_with_no_stops_left_is_not_written_and_neither_are_its_notes(conn):
-    a = add_place(conn, 1, "浅草寺")
-    p = parsed(places=[ref(1, "淺草寺"), ref(2, "餐廳")],
-               days=[Day("D1", "", ["p2"]), Day("D2", "", ["p1"]), Day("D3", "", [])],
-               day_notes=[DayNote("D1", "這天只有吃飯"), DayNote("D2", "這天去淺草"),
-                          DayNote("D3", "這天還沒排"), DayNote("", "整趟的建議")])
-
-    dropped = store.write_article(conn, ARTICLE, p, {"p1": a, "p2": None})
-
     assert rows(conn, "SELECT id FROM day") == [(1,)]
+    assert rows(conn, "SELECT day_id, seq, poi_id FROM day_place ORDER BY seq") == [(1, 1, a), (1, 2, c)]
     assert rows(conn, "SELECT day_id, content FROM day_note") == [(1, "這天去淺草"), (None, "整趟的建議")]
-    assert dropped == 3   # 一站、兩則 day_note
+    assert rows(conn, "SELECT poi_id, content FROM place_note") == [(a, "人很多")]   # 同一個地點的其他資料照寫
+    assert dropped == {store.DAY: 1, store.DAY_NOTE: 2}   # 有一站捨棄的 D1、沒有站的 D3 的 day_note
 
 
-def test_note_on_a_place_left_out_is_not_written(conn):
+def test_note_on_a_dropped_place_is_not_written(conn):
     a = add_place(conn, 1, "浅草寺")
     p = parsed(places=[ref(1, "淺草寺"), ref(2, "餐廳")],
                place_notes=[PlaceNote("p2", "很好吃", []), PlaceNote("p1", "人很多", [])])
@@ -93,31 +86,19 @@ def test_note_on_a_place_left_out_is_not_written(conn):
     dropped = store.write_article(conn, ARTICLE, p, {"p1": a, "p2": None})
 
     assert rows(conn, "SELECT poi_id, content FROM place_note") == [(a, "人很多")]
-    assert dropped == 1
+    assert dropped == {store.PLACE_NOTE: 1}
 
 
-def test_move_with_one_end_left_out_becomes_a_note_on_the_other_end(conn):
+def test_move_with_a_dropped_end_is_not_written(conn):
     a = add_place(conn, 1, "成田空港")
-    p = parsed(places=[ref(1, "成田機場"), ref(2, "飯店")],
+    p = parsed(places=[ref(1, "成田機場"), ref(2, "飯店"), ref(3, "車站")],
                moves=[Move("p1", "p2", "搭 skyliner 到飯店約 1 小時", [TimeTag(time="18-4")]),
-                      Move("p2", "p1", "回程搭利木津巴士", [])])
+                      Move("p2", "p1", "回程搭利木津巴士", []), Move("p3", "p2", "走路五分鐘", [])])
 
-    dropped = store.write_article(conn, ARTICLE, p, {"p1": a})   # p2 不在裡面，也是不收入
-
-    assert rows(conn, "SELECT * FROM move") == []
-    assert rows(conn, "SELECT poi_id, poi_name, content FROM place_note") == [
-        (a, "成田機場", "搭 skyliner 到飯店約 1 小時"), (a, "成田機場", "回程搭利木津巴士")]
-    assert rows(conn, "SELECT note_id, time FROM place_note_time") == [(1, "18-4")]
-    assert dropped == 0
-
-
-def test_move_with_both_ends_left_out_is_not_written(conn):
-    p = parsed(places=[ref(1, "車站"), ref(2, "飯店")], moves=[Move("p1", "p2", "走路五分鐘", [])])
-
-    dropped = store.write_article(conn, ARTICLE, p, {"p1": None, "p2": None})
+    dropped = store.write_article(conn, ARTICLE, p, {"p1": a, "p2": None, "p3": None})
 
     assert rows(conn, "SELECT * FROM move") == [] and rows(conn, "SELECT * FROM place_note") == []
-    assert dropped == 1
+    assert dropped == {store.MOVE: 3}
     assert store.has_article(conn, ARTICLE.id)
 
 

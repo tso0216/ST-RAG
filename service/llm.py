@@ -3,9 +3,14 @@
 schema 為 None 時不限制輸出格式，回傳純文字。
 tools 給工具名稱（例如 `["WebSearch", "WebFetch"]`）時開這些工具，而且直接執行不用確認；預設不開任何工具。
 
+每次呼叫的用量會加進目前所有 `track()` 開著的 `Tally`，呼叫的人用它算一段流程總共花了多少 token。
+
 LLM 呼叫只在這裡，之後要換成 `claude -p` 或正式 API 只改這個檔。
 """
 import os
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 
 from claude_agent_sdk import ClaudeAgentOptions, ResultMessage, query
@@ -18,10 +23,48 @@ class LLMError(Exception):
 @dataclass(frozen=True)
 class Usage:
     """一次呼叫的用量。cost_usd 是 CLI 照 API 定價估的金額（走訂閱額度時不會真的收這筆）；duration_ms 是 API 花的時間。"""
-    input_tokens: int = 0
+    input_tokens: int = 0         # 含快取讀寫的 token
     output_tokens: int = 0
     cost_usd: float = 0.0
     duration_ms: int = 0
+    cache_read_tokens: int = 0    # input_tokens 裡從快取讀的（比一般輸入便宜很多）
+
+
+@dataclass
+class Tally:
+    """好幾次呼叫的用量合計。"""
+    calls: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_read_tokens: int = 0
+    cost_usd: float = 0.0
+
+    def add(self, usage: Usage) -> None:
+        self.calls += 1
+        self.input_tokens += usage.input_tokens
+        self.output_tokens += usage.output_tokens
+        self.cache_read_tokens += usage.cache_read_tokens
+        self.cost_usd += usage.cost_usd
+
+
+_tallies: ContextVar[tuple[Tally, ...]] = ContextVar("llm_tallies", default=())
+
+
+@contextmanager
+def track(tally: Tally | None = None) -> Iterator[Tally]:
+    """這個區塊裡（包含在裡面建立的 asyncio task）每次呼叫的用量都加進 tally；可以一層包一層，每一層都會加。"""
+    tally = Tally() if tally is None else tally
+    token = _tallies.set(_tallies.get() + (tally,))
+    try:
+        yield tally
+    finally:
+        _tallies.reset(token)
+
+
+def record(usage: Usage) -> None:
+    """把一次呼叫的用量加進目前開著的每個 `Tally`（假的 llm 也可以呼叫它）。"""
+    for tally in _tallies.get():
+        tally.add(usage)
 
 
 async def call(
@@ -80,5 +123,7 @@ async def call_detailed(
     usage = result.usage or {}
     input_tokens = sum(usage.get(k) or 0 for k in
                        ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"))
-    return (result.result or "" if schema is None else result.structured_output), Usage(
-        input_tokens, usage.get("output_tokens") or 0, result.total_cost_usd or 0.0, result.duration_api_ms or 0)
+    spent = Usage(input_tokens, usage.get("output_tokens") or 0, result.total_cost_usd or 0.0,
+                  result.duration_api_ms or 0, usage.get("cache_read_input_tokens") or 0)
+    record(spent)
+    return (result.result or "" if schema is None else result.structured_output), spent

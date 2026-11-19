@@ -9,7 +9,6 @@ from v4.extract.local_map import LocalMap
 def no_real_data(tmp_path, monkeypatch):
     """測試一律不碰真的 `data/`：資料庫、tsv、pending、本機地圖、log 的預設路徑都換到 tmp_path。"""
     monkeypatch.setattr(config, "DB_PATH", tmp_path / "default" / "v4.db")
-    monkeypatch.setattr(config, "UNRESOLVED_PATH", tmp_path / "default" / "place_unresolved.tsv")
     monkeypatch.setattr(config, "PENDING_DIR", tmp_path / "default" / "v4_pending")
     monkeypatch.setattr(config, "LOCAL_MAP_PATH", tmp_path / "default" / "japan.duckdb")
     monkeypatch.setattr(config, "LOG_DIR", tmp_path / "default" / "logs")
