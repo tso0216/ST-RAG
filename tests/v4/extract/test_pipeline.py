@@ -10,7 +10,7 @@ from service.llm import LLMError
 from tests.v4.extract import fakes
 from tests.v4.extract.fakes import FakeGsi, build_map
 from v4.extract import __main__ as cli
-from v4.extract import ask_place, config, geocode_log, pending, pipeline, store
+from v4.extract import config, pending, pipeline, store, usage
 from v4.extract.local_map import LocalMap
 
 ID = "M.1767013758.A.A9D"
@@ -32,22 +32,22 @@ def article_file(folder, n: int = 0, **fields):
 
 
 LINE = fakes.line(
-    places=[fakes.place("p1", "淺草寺", "浅草寺"), fakes.place("p2", "晴空塔", "スカイツリー")],
+    places=[fakes.line_place("p1", "淺草寺", "浅草寺"), fakes.line_place("p2", "晴空塔", "スカイツリー")],
     days=[fakes.day("D1", ["p1", "p2"], month="2")])
 NOTE = fakes.note(
     place_notes=[fakes.place_note("p1", "早上人很少", times=[fakes.time(time="5-10")])],
     moves=[fakes.move("p1", "p2", "走過去 20 分鐘")],
-    day_notes=[fakes.day_note("D1", "這天很順")])
+    day_notes=[fakes.day_note([1], "這天很順")])
 
 # 行程裡有解析不到的地點（築地場外市場）和猜不出來的地點（飯店）
 HARD_LINE = fakes.line(
-    places=[fakes.place("p1", "淺草寺", "浅草寺"), fakes.place("p2", "築地場外市場", "築地場外市場"),
-            fakes.place("p3", "飯店", "ホテル", located="猜不出來", reason="沒寫是哪一間")],
+    places=[fakes.line_place("p1", "淺草寺", "浅草寺"), fakes.line_place("p2", "築地場外市場", "築地場外市場"),
+            fakes.line_place("p3", "飯店", "ホテル", located="猜不出來", reason="沒寫是哪一間")],
     days=[fakes.day("D1", ["p1", "p2", "p3"])])
 
 # 築地場外市場本機地圖沒有，要上網查地址
 TSUKIJI_LINE = fakes.line(
-    places=[fakes.place("p1", "淺草寺", "浅草寺"), fakes.place("p2", "築地場外市場", "築地場外市場")],
+    places=[fakes.line_place("p1", "淺草寺", "浅草寺"), fakes.line_place("p2", "築地場外市場", "築地場外市場")],
     days=[fakes.day("D1", ["p1", "p2"])])
 
 
@@ -91,9 +91,15 @@ def test_article_goes_from_json_to_database(env, use_llm):
     r = env.run()
 
     assert (r.written, r.skipped, r.dropped, r.error) == ([ID], [], {}, None)
-    assert [kind for kind, _ in llm.calls] == ["line", "note", "plan", "pick", "plan", "pick"]
-    assert {step: (t.calls, t.input_tokens) for step, t in r.llm_usage.items()} == {
-        pipeline.PARSE: (2, 2000), pipeline.GEOCODE: (4, 4000)}
+    # 兩個地點一起問：搜尋計畫一次、挑哪一筆一次
+    assert [kind for kind, _ in llm.calls] == ["line", "note", "plan", "pick"]
+    assert all('<item ref="p1">' in u and '<item ref="p2">' in u for u in (*llm.users("plan"), *llm.users("pick")))
+    assert {name: p.tally.calls for name, p in r.parts.items() if p.tally.calls} == {
+        usage.LINE: 1, usage.NOTE: 1, usage.PLAN: 1, usage.PICK: 1}
+    assert r.parts[usage.LINE].tally.input_tokens == 1000
+    assert all(r.parts[name].seconds > 0 for name in (usage.LINE, usage.NOTE, usage.PLAN, usage.PICK, usage.MAP,
+                                                      usage.WRITE))
+    assert r.parts[usage.WEB].seconds == r.parts[usage.GSI].seconds == 0
     assert env.rows("SELECT id, posted_at FROM article") == [(ID, "2025-12-29T21:09:16")]
     assert env.rows("SELECT s.source, s.source_id, p.name_ja, p.name_zh FROM place p"
                     " JOIN place_source s ON s.place_id = p.id ORDER BY p.id") == [
@@ -103,7 +109,8 @@ def test_article_goes_from_json_to_database(env, use_llm):
     assert env.rows("SELECT poi_id, poi_name, content FROM place_note") == [(1, "淺草寺", "早上人很少")]
     assert env.rows("SELECT time FROM place_note_time") == [("5-10",)]
     assert env.rows("SELECT from_id, to_id, content FROM move") == [(1, 2, "走過去 20 分鐘")]
-    assert env.rows("SELECT day_id, content FROM day_note") == [(1, "這天很順")]
+    assert env.rows("SELECT content FROM day_note") == [("這天很順",)]
+    assert env.rows("SELECT note_id, day_id FROM day_note_day") == [("1767013758-1", "1767013758-1")]
     assert not pending.path_of(env.pending, ID).exists()
 
 
@@ -150,28 +157,29 @@ def test_articles_without_author_already_in_database_or_repeated_are_skipped(env
 
 # ---------- 解析不到的地點 ----------
 
-def test_dropped_places_take_their_day_notes_and_moves_with_them(env, use_llm):
+def test_unresolved_places_are_written_without_a_place(env, use_llm):
     article_file(env.articles)
-    line = fakes.line(places=[*HARD_LINE["places"], fakes.place("p4", "晴空塔", "スカイツリー")],
-                      days=[fakes.day("D1", ["p1", "p2", "p3"]), fakes.day("D2", ["p1", "p4"])])
+    line = fakes.line(places=[*HARD_LINE["places"], fakes.line_place("p4", "晴空塔", "スカイツリー")],
+                      days=[fakes.day("D1", ["p1", "p2", "h3"]), fakes.day("D2", ["p1", "p4"])])
     note = fakes.note(place_notes=[fakes.place_note("p2", "海鮮丼很讚"), fakes.place_note("p1", "早上人很少")],
                       moves=[fakes.move("p1", "p2", "搭地鐵 30 分鐘"), fakes.move("p1", "p4", "走過去 20 分鐘")],
-                      day_notes=[fakes.day_note("D1", "這天很趕"), fakes.day_note("D2", "這天很順")])
+                      day_notes=[fakes.day_note([1], "這天很趕"), fakes.day_note([2], "這天很順")])
     use_llm(line=line, note=note)
 
     r = env.run()
 
-    assert (r.written, r.error) == ([ID], None)
-    assert r.dropped == {store.DAY: 1, store.DAY_NOTE: 1, store.PLACE_NOTE: 1, store.MOVE: 1}
-    assert env.rows("SELECT d.id, p.name_zh FROM day d JOIN day_place dp ON dp.day_id = d.id"
-                    " JOIN place p ON p.id = dp.poi_id ORDER BY dp.seq") == [(1, "淺草寺"), (1, "晴空塔")]
-    assert env.rows("SELECT content FROM day_note") == [("這天很順",)]
-    assert env.rows("SELECT poi_name, content FROM place_note") == [("淺草寺", "早上人很少")]
-    assert env.rows("SELECT content FROM move") == [("走過去 20 分鐘",)]
+    assert (r.written, r.error, r.dropped) == ([ID], None, {})
+    assert env.rows("SELECT day_id, poi_id IS NULL, poi_name, type FROM day_place ORDER BY day_id, seq") == [
+        ("1767013758-1", 0, "淺草寺", "景點"), ("1767013758-1", 1, "築地場外市場", "景點"), ("1767013758-1", 1, "飯店", "住宿"),
+        ("1767013758-2", 0, "淺草寺", "景點"), ("1767013758-2", 0, "晴空塔", "景點")]
+    assert env.rows("SELECT content FROM day_note ORDER BY id") == [("這天很趕",), ("這天很順",)]
+    assert env.rows("SELECT poi_id IS NULL, poi_name, content FROM place_note ORDER BY id") == [
+        (1, "築地場外市場", "海鮮丼很讚"), (0, "淺草寺", "早上人很少")]
+    assert env.rows("SELECT to_id IS NULL, to_name, content FROM move ORDER BY id") == [
+        (1, "築地場外市場", "搭地鐵 30 分鐘"), (0, "晴空塔", "走過去 20 分鐘")]
     assert not pending.path_of(env.pending, ID).exists()
-    lines = geocode_log.read(r.geocode_log)
-    assert [(x["name_zh"], x["result"], x["fail_reason"]) for x in lines if x["result"] == "捨棄"] == [
-        ("築地場外市場", "捨棄", "上網查不到地址"), ("飯店", "捨棄", "猜不出來")]
+    assert [(t.place.name_zh, t.result, t.fail_reason) for t in r.geocode_traces if t.result == "解析不到"] == [
+        ("築地場外市場", "解析不到", "上網查不到地址"), ("飯店", "解析不到", "猜不出來")]
 
 
 # ---------- 整批停下 ----------
@@ -196,7 +204,7 @@ def test_llm_failure_stops_the_batch_and_keeps_what_was_written(env, use_llm):
 def test_itinerary_that_still_fails_the_check_after_retries_stops_the_batch(env, use_llm):
     article_file(env.articles)
     _, second = article_file(env.articles, 1)
-    bad = fakes.line(places=[fakes.place("p1", "淺草寺", "浅草寺")], days=[fakes.day("D1", ["p1", "p7"])])
+    bad = fakes.line(places=[fakes.line_place("p1", "淺草寺", "浅草寺")], days=[fakes.day("D1", ["p1", "p7"])])
     llm = use_llm(line=bad, note=NOTE)
 
     r = env.run()
@@ -216,16 +224,18 @@ def test_gsi_failure_stops_the_batch_and_the_parse_result_is_kept_for_the_rerun(
 
     assert r.written == [] and "國土地理院連線失敗" in r.error and r.unfinished == [ID]
     assert pending.path_of(env.pending, ID).exists()
-    # 已經寫的行還在，最後一行是 中斷
-    lines = geocode_log.read(r.geocode_log)
-    assert [(x["name_zh"], x["result"]) for x in lines] == [("淺草寺", "地圖-第1輪"), ("築地場外市場", "中斷")]
-    assert "國土地理院連線失敗" in lines[-1]["fail_reason"]
+    # 已經寫的還在，最後一個是 中斷
+    traces = r.geocode_traces
+    assert [(t.place.name_zh, t.result) for t in traces] == [("淺草寺", "地圖-第1輪"), ("築地場外市場", "中斷")]
+    assert "國土地理院連線失敗" in traces[-1].fail_reason
+    assert "築地場外市場｜築地場外市場｜東京｜景點｜是　→　中斷（GsiError: 國土地理院連線失敗）" in \
+        (r.log_dir / f"{ID}.log").read_text(encoding="utf-8")
 
     env.gsi = FakeGsi()
     llm = use_llm(web=fakes.web("東京都中央区築地4-16-2"))
     r = env.run()
     assert r.written == [ID] and llm.users("line") == []
-    assert [x["result"] for x in geocode_log.read(r.geocode_log)] == ["資料庫", "上網"]
+    assert [t.result for t in r.geocode_traces] == ["資料庫", "上網"]
 
 
 def test_llm_failure_while_resolving_a_place_is_logged_as_stopped(env, use_llm):
@@ -238,9 +248,10 @@ def test_llm_failure_while_resolving_a_place_is_logged_as_stopped(env, use_llm):
     r = env.run()
 
     assert "額度用完" in r.error
-    [line] = geocode_log.read(r.geocode_log)
-    assert (line["name_zh"], line["result"], line["llm_calls"]) == ("淺草寺", "中斷", 2)   # 搜尋計畫 1 次、挑 1 次
-    assert "額度用完" in line["fail_reason"]
+    # 兩個地點同一批，一起中斷；各參與了搜尋計畫 1 次、挑 1 次
+    assert [(t.place.name_zh, t.result, t.llm_calls) for t in r.geocode_traces] == [
+        ("淺草寺", "中斷", 2), ("晴空塔", "中斷", 2)]
+    assert all("額度用完" in t.fail_reason for t in r.geocode_traces)
 
 
 # ---------- 並行 ----------
@@ -250,7 +261,9 @@ def test_jobs_limits_how_many_articles_are_parsed_at_once(env, use_llm, monkeypa
     ids = [article_file(env.articles, n)[1] for n in range(5)]
     running, peak = 0, 0
 
-    async def slow(system, user, schema, model, effort=None):
+    geocode = fakes.FakeLLM()
+
+    async def slow(system, user, schema, model, effort=None, tools=None):
         nonlocal running, peak
         if schema is fakes.LINE_SCHEMA:
             running += 1
@@ -261,9 +274,7 @@ def test_jobs_limits_how_many_articles_are_parsed_at_once(env, use_llm, monkeypa
             await asyncio.sleep(0.01)
             running -= 1
             return json.loads(json.dumps(NOTE))
-        if schema is ask_place.PLAN_SCHEMA:
-            return fakes.default_plan(user)
-        return {"reason": "", "choice": 1}
+        return await geocode(system, user, schema, model, effort, tools)
     monkeypatch.setattr("service.llm.call", slow)
 
     r = env.run(jobs=jobs)
@@ -284,45 +295,76 @@ def cli_paths(tmp_path, monkeypatch):
     return tmp_path
 
 
-def test_command_line_exits_zero_when_everything_is_written(cli_paths, use_llm, capsys):
+def cli_run(cli_paths, *extra) -> int:
+    return cli.main([str(cli_paths / "articles"), "--db", str(cli_paths / "v4.db"), *extra])
+
+
+def log_dir(cli_paths):
+    [folder] = (cli_paths / "logs").glob("extract_*")
+    return folder
+
+
+def run_log(cli_paths) -> str:
+    """整批的 `_run.log`：進度和總結。"""
+    return (log_dir(cli_paths) / "_run.log").read_text(encoding="utf-8")
+
+
+def article_log(cli_paths, article_id=ID) -> str:
+    """一篇的 log 檔：這篇的進度、每個地點、--verbose 的過程。"""
+    return (log_dir(cli_paths) / f"{article_id}.log").read_text(encoding="utf-8")
+
+
+def test_command_line_prints_only_a_brief_summary(cli_paths, use_llm, capsys):
     article_file(cli_paths / "articles")
     use_llm(line=LINE, note=NOTE)
 
-    code = cli.main([str(cli_paths / "articles"), "--db", str(cli_paths / "v4.db")])
+    code = cli_run(cli_paths)
 
     assert code == 0
-    out = capsys.readouterr().out
-    assert "寫入：1 篇" in out
-    [log] = (cli_paths / "logs").glob("geocode_*.jsonl")
-    assert f"地點解析：共 2 個（log：{log}）" in out
-    assert "  資料庫 0、地圖-第1輪 2、地圖-第2輪 0、地圖-第3輪 0、上網 0、捨棄 0" in out
-    assert "拿掉沒寫入：0 筆" in out and "捨棄的地點" not in out
+    folder = log_dir(cli_paths)
+    assert capsys.readouterr().out.splitlines() == [
+        "共 1 篇",
+        f"log：{folder}/",
+        f"[1/1] {ID} [問題] 東京行程 0：地點 2、天 1",
+        "",
+        "寫入 1 篇、略過 0 篇",
+        "地點 2 個，解析不到 0 個",
+        "llm 4 次，約 US$0.04",
+        "花費時間：0 秒",
+        f"log：{folder}/",
+    ]
 
 
-def test_command_line_prints_progress_and_the_tokens_spent(cli_paths, use_llm, capsys):
+def test_log_folder_has_the_progress_the_full_summary_and_one_file_per_article(cli_paths, use_llm, capsys):
     article_file(cli_paths / "articles")
     use_llm(line=LINE, note=NOTE)
 
-    cli.main([str(cli_paths / "articles"), "--db", str(cli_paths / "v4.db")])
+    cli_run(cli_paths)
 
-    out = capsys.readouterr().out
+    text = run_log(cli_paths)
     tag = f"[1/1] {ID}"
-    progress = [line for line in out.splitlines() if line.startswith((tag, "  1/2", "  2/2", "這次要做"))]
-    assert [line.split("（")[0] for line in progress] == [
-        "這次要做 1 篇：每篇 llm 解析 → 地點解析 → 寫入",
-        f"{tag} llm 解析中：[問題] 東京行程 0",
-        f"{tag} llm 解析完成：2 個地點、1 天",
-        f"{tag} 地點解析開始：2 個地點",
-        "  1/2 淺草寺：地圖-第1輪 → 浅草寺",
-        "  2/2 晴空塔：地圖-第1輪 → 東京スカイツリー",
-        f"{tag} 寫入",
+    steps = [f"{tag} llm 解析：[問題] 東京行程 0，推文 1 則",
+             f"{tag} llm 解析完成：地點 2、天 1，llm 2 次，0 秒",
+             f"{tag} 地點解析：2 個"]
+    progress = [line for line in text.splitlines() if line.startswith((tag, "[p", "共 "))]
+    assert progress == ["共 1 篇", *steps, f"{tag} 寫入：地點解析 llm 2 次，0 秒"]
+    in_article = [line for line in article_log(cli_paths).splitlines() if line.startswith((tag, "[p", "="))]
+    assert in_article == [
+        f"========== {ID} ==========", *steps,
+        "[p1] 淺草寺｜浅草寺｜東京｜景點｜是　→　地圖-第1輪：浅草寺",
+        "[p2] 晴空塔｜スカイツリー｜東京｜景點｜是　→　地圖-第1輪：東京スカイツリー",
+        f"{tag} 寫入：地點解析 llm 2 次，0 秒",
     ]
-    assert "  1/2 淺草寺：地圖-第1輪 → 浅草寺（llm 2 次，0 秒）" in out
-    assert "llm 用量：共 6 次，輸入 6,000 token（其中快取讀取 3,600）、輸出 300 token" in out
-    assert "  照 API 定價約 US$0.06（走訂閱額度不會真的收這筆）" in out
-    assert f"  {pipeline.PARSE}：2 次，輸入 2,000 token（其中快取讀取 1,200）、輸出 100 token" in out
-    assert f"  {pipeline.GEOCODE}：4 次，輸入 4,000 token（其中快取讀取 2,400）、輸出 200 token" in out
-    assert "花費時間：0 秒" in out
+    summary = text.split("========== 總結 ==========\n\n")[1]
+    assert summary.startswith("寫入：1 篇\n略過：0 篇\n拿掉沒寫入：0 筆\n\n地點解析：共 2 個\n"
+                              "  資料庫 0、地圖-第1輪 2、地圖-第2輪 0、上網 0、解析不到 0\n")
+    assert "解析不到的地點" not in summary
+    assert "llm 用量：共 4 次，輸入 4,000 token（其中快取讀取 2,400）、輸出 200 token" in summary
+    assert "  約 US$0.04" in summary
+    assert f"  {usage.LINE}：llm 1 次，token 1,050（25%），US$0.01，時間 0 秒（" in summary
+    assert f"  {usage.WEB}：llm 0 次，token 0（0%），US$0.00，時間 0 秒（0%）" in summary
+    assert f"  {usage.MAP}：時間 0 秒（" in summary
+    assert summary.endswith("花費時間：0 秒\n")
 
 
 def test_each_article_reports_its_own_llm_calls(cli_paths, use_llm, capsys):
@@ -330,10 +372,10 @@ def test_each_article_reports_its_own_llm_calls(cli_paths, use_llm, capsys):
     article_file(cli_paths / "articles", 1)
     use_llm(line=LINE, note=NOTE)
 
-    cli.main([str(cli_paths / "articles"), "--db", str(cli_paths / "v4.db")])
+    cli_run(cli_paths)
 
-    done = [line for line in capsys.readouterr().out.splitlines() if "llm 解析完成" in line]
-    assert len(done) == 2 and all("（llm 2 次，" in line for line in done)
+    done = [line for line in run_log(cli_paths).splitlines() if "llm 解析完成" in line]
+    assert len(done) == 2 and all("，llm 2 次，" in line for line in done)
 
 
 def test_command_line_prints_the_tokens_spent_when_interrupted(cli_paths, use_llm, capsys):
@@ -351,25 +393,26 @@ def test_command_line_prints_the_tokens_spent_when_interrupted(cli_paths, use_ll
     assert "llm 用量：共 3 次" in out.out   # line、note，加上被中斷的那次搜尋計畫
 
 
-def test_command_line_lists_the_dropped_places_and_what_was_left_out(cli_paths, use_llm, capsys):
+def test_command_line_lists_the_unresolved_places(cli_paths, use_llm, capsys):
     article_file(cli_paths / "articles")
     use_llm(line=HARD_LINE, note=fakes.note())
 
-    code = cli.main([str(cli_paths / "articles"), "--db", str(cli_paths / "v4.db")])
+    code = cli_run(cli_paths)
 
     out = capsys.readouterr().out
     assert code == 0
-    assert "寫入：1 篇" in out
-    assert "拿掉沒寫入：1 筆（天 1）" in out
-    assert f"[1/1] {ID} 寫入（地點解析 0 秒，捨棄 2 個地點，拿掉 天 1）" in out
-    assert "  2/3 築地場外市場：捨棄（上網查不到地址）" in out
-    assert "地點解析：共 3 個" in out
-    assert "  資料庫 0、地圖-第1輪 1、地圖-第2輪 0、地圖-第3輪 0、上網 0、捨棄 2" in out
-    assert "  捨棄的原因：上網查不到地址 1、國土地理院查不到這個地址 0、猜不出來 1" in out
-    assert f"  {ID} 築地場外市場（築地場外市場）：上網查不到地址" in out
-    assert f"  {ID} 飯店（ホテル）：猜不出來" in out
-    # 築地場外市場：第 1 輪沒有候選，llm 沒給新名稱（假的回空字串），第 2、3 輪名稱重複
-    assert "  本機地圖每一輪的失敗：沒有候選 1、AI 都不選 0、名稱重複 2" in out
+    assert f"[1/1] {ID} [問題] 東京行程 0：地點 3、天 1，解析不到 2" in out
+    assert "地點 3 個，解析不到 2 個" in out
+    assert "築地場外市場" not in out   # 明細只在 log 檔
+    text = run_log(cli_paths)
+    assert f"[1/1] {ID} 寫入：地點解析 llm 4 次，0 秒，解析不到 2" in text
+    assert "築地場外市場｜築地場外市場｜東京｜景點｜是　→　解析不到（上網查不到地址）" in article_log(cli_paths)
+    assert "  資料庫 0、地圖-第1輪 1、地圖-第2輪 0、上網 0、解析不到 2" in text
+    assert "  解析不到的原因：上網查不到地址 1、國土地理院查不到這個地址 0、猜不出來 1" in text
+    assert f"  {ID} 築地場外市場（築地場外市場）：上網查不到地址" in text
+    assert f"  {ID} 飯店（ホテル）：猜不出來" in text
+    # 築地場外市場：第 1 輪沒有候選，llm 沒給新名稱（假的回空字串），第 2 輪名稱重複
+    assert "  本機地圖每輪失敗：沒有候選 1、AI 都不選 0、名稱重複 1" in text
 
 
 def test_command_line_stops_when_the_local_map_is_missing(cli_paths, monkeypatch, use_llm, capsys):
@@ -397,15 +440,29 @@ def test_command_line_exits_non_zero_when_the_batch_stops(cli_paths, use_llm, ca
     assert "額度用完" in capsys.readouterr().err
 
 
-def test_verbose_prints_the_problems_and_which_retry_it_is(cli_paths, use_llm, caplog):
+def test_verbose_writes_the_steps_and_llm_calls_into_the_log_file(cli_paths, use_llm, capsys):
     article_file(cli_paths / "articles")
-    bad = fakes.line(places=[fakes.place("p1", "淺草寺", "浅草寺")], days=[fakes.day("D1", ["p1", "p7"])])
+    bad = fakes.line(places=[fakes.line_place("p1", "淺草寺", "浅草寺")], days=[fakes.day("D1", ["p1", "p7"])])
     use_llm(line=[bad, LINE], note=NOTE)
 
-    cli.main([str(cli_paths / "articles"), "--db", str(cli_paths / "v4.db"), "--verbose"])
+    cli_run(cli_paths, "--verbose")
 
-    err = caplog.text
-    assert f"{ID} 第一次解析（線）：檢查出 1 個問題，回報 llm 重試第 1 次（最多 2 次）" in err
-    assert "days[0]：stops 的 p7 不在 places 裡" in err
-    assert "第 1 輪查本機地圖「浅草寺」東京都：2 筆" in err and "llm 挑第 1 筆" in err
-    assert "llm 的搜尋計畫：浅草寺｜{'pref': '東京'}" in err
+    text = article_log(cli_paths)
+    assert f"{ID} 第一次解析（線）：1 個問題，重試 1/2" in text
+    assert "days[0]：stops 的 p7 不在 places 裡" in text
+    assert "淺草寺 第 1 輪查本機地圖「浅草寺」東京都：2 筆" in text and "淺草寺 挑第 1 筆" in text
+    assert "淺草寺 的搜尋計畫：浅草寺｜{'pref': '東京'}" in text
+    assert "━━━━━ llm #" in text
+    out = capsys.readouterr()
+    assert "個問題" not in out.out + out.err and "━━━━━" not in out.out + out.err   # 終端機不印
+
+
+def test_without_verbose_the_log_file_has_no_llm_calls(cli_paths, use_llm, capsys):
+    article_file(cli_paths / "articles")
+    use_llm(line=LINE, note=NOTE)
+
+    cli_run(cli_paths)
+
+    text = run_log(cli_paths) + article_log(cli_paths)
+    assert "━━━━━" not in text and "的搜尋計畫" not in text
+    assert "[p1] 淺草寺｜浅草寺｜東京｜景點｜是　→　地圖-第1輪：浅草寺" in text

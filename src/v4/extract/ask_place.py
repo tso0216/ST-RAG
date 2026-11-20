@@ -1,25 +1,28 @@
-"""問 llm：要用哪些名稱、在什麼範圍查（搜尋計畫）、候選裡哪一個是這個地點、上網查地址。組提示詞、定義輸出格式、呼叫 llm。只有 `geocoding` 用。"""
+"""問 llm：要用哪些名稱、在什麼範圍查（搜尋計畫）、候選裡哪一個是這個地點、上網查地址。組提示詞、定義輸出格式、呼叫 llm。只有 `geocoding` 用。
+
+三種都是一次問好幾個地點（一批最多 `config.GEOCODE_BATCH` 個，由 `geocoding` 分批）：每個地點包成
+`<item ref="地點編號">…</item>`，llm 回 `places` 陣列，一個地點一筆，用 `ref` 對回去。
+"""
 import logging
 from dataclasses import dataclass
 from math import asin, cos, radians, sin, sqrt
 
-from service import llm
-
-from . import config
+from . import config, llm_log, usage
 from .data_schema import LOCATED_GUESS, SOURCE_LABELS, Area, Candidate, Context, Nearby, PlaceRef
 
 log = logging.getLogger(__name__)
 
-PICK_SCHEMA = {
+_PICK_ITEM = {
     "type": "object",
-    "properties": {"reason": {"type": "string"}, "choice": {"type": "integer"}},
-    "required": ["reason", "choice"],
+    "properties": {"ref": {"type": "string"}, "reason": {"type": "string"}, "choice": {"type": "integer"}},
+    "required": ["ref", "reason", "choice"],
     "additionalProperties": False,
 }
 
-PLAN_SCHEMA = {
+_PLAN_ITEM = {
     "type": "object",
     "properties": {
+        "ref": {"type": "string"},
         "reason": {"type": "string"},
         "names": {"type": "array", "items": {"type": "string"}},
         "pref": {"type": "string"},
@@ -27,30 +30,43 @@ PLAN_SCHEMA = {
         "near": {"type": "integer"},
         "km": {"type": "number"},
     },
-    "required": ["reason", "names", "pref", "municipality", "near", "km"],
+    "required": ["ref", "reason", "names", "pref", "municipality", "near", "km"],
     "additionalProperties": False,
 }
 
-WEB_ADDRESS_SCHEMA = {
+_WEB_ITEM = {
     "type": "object",
-    "properties": {"found": {"type": "boolean"}, "address": {"type": "string"}, "source_url": {"type": "string"}},
-    "required": ["found", "address", "source_url"],
+    "properties": {"ref": {"type": "string"}, "found": {"type": "boolean"}, "address": {"type": "string"},
+                   "source_url": {"type": "string"}},
+    "required": ["ref", "found", "address", "source_url"],
     "additionalProperties": False,
 }
-WEB_TOOLS = ["WebSearch", "WebFetch"]
 
+
+def _batch(item: dict) -> dict:
+    """一次問好幾個地點：輸出是 `places` 陣列，一個地點一筆，用 `ref` 對回去。"""
+    return {"type": "object", "properties": {"places": {"type": "array", "items": item}},
+            "required": ["places"], "additionalProperties": False}
+
+
+PICK_SCHEMA = _batch(_PICK_ITEM)
+PLAN_SCHEMA = _batch(_PLAN_ITEM)
+WEB_ADDRESS_SCHEMA = _batch(_WEB_ITEM)
+WEB_TOOLS = ["WebSearch", "WebFetch"]
+NO_ANSWER = "llm 沒有回這個地點"
 
 
 @dataclass(frozen=True)
 class Plan:
     """一輪的搜尋計畫。範圍：`near` 不是 0 是圓（同一天第幾個地點為中心、半徑 `km`），
-    否則 `pref`、`municipality` 是行政區，都空的是全日本。"""
+    否則 `pref`、`municipality` 是行政區，都空的是全日本。answered 是 False：llm 沒有回這個地點。"""
     names: list[str]
     pref: str = ""
     municipality: str = ""
     near: int = 0
     km: float = 0.0
     reason: str = ""
+    answered: bool = True
 
     def to_log(self) -> dict:
         if self.near:
@@ -71,80 +87,152 @@ class WebAddress:
     source_url: str  # 寫著這個地址的網頁
 
 
-async def plan(place: PlaceRef, ctx: Context, history: list[str], error: str = "") -> Plan:
-    """請 llm 給這一輪的搜尋計畫：幾個日文名稱和一個範圍。
+@dataclass(frozen=True)
+class PlanAsk:
+    """問一個地點的搜尋計畫要給的東西。history：之前每一輪（一輪一行）；error：上一次的範圍不能用的原因。"""
+    place: PlaceRef
+    ctx: Context
+    history: list[str]
+    error: str = ""
 
-    history：之前每一輪查了什麼、結果如何（一輪一行）；error：上一次給的範圍不能用的原因（請它改）。
+
+@dataclass(frozen=True)
+class PickAsk:
+    """問一個地點是哪一筆候選要給的東西。llm 挑的編號是 candidates 的第幾筆（1 起算）。
+    area 是實際查的範圍；widened_from 是自動放寬前的（沒放寬是 None）。"""
+    place: PlaceRef
+    ctx: Context
+    candidates: list[Candidate]
+    area: Area
+    widened_from: Area | None = None
+
+
+@dataclass(frozen=True)
+class WebAsk:
+    """問一個地點的地址要給的東西。tried：在地圖上試過的日文名稱。"""
+    place: PlaceRef
+    ctx: Context
+    tried: list[str]
+
+
+async def plan(asks: list[PlanAsk]) -> dict[str, Plan]:
+    """一次請 llm 給好幾個地點這一輪的搜尋計畫（幾個日文名稱和一個範圍）。回傳 地點編號 → 計畫。
+
+    llm 沒回的地點是 `answered=False`、沒有名稱的計畫；`geocoding` 把它當成範圍不能用，跟其他要重問的一起重問。
     """
-    parts = [_describe(place, ctx, numbered=True)]
-    if history:
-        parts.append("<history>\n" + "\n".join(history) + "\n</history>")
-    if error:
-        parts.append(f"<error>{error}</error>")
-    out = await llm.call((config.PROMPT_DIR / "plan.md").read_text(), "\n".join(parts), PLAN_SCHEMA,
-                         config.MODEL, effort=config.EFFORT)
-    names = list(dict.fromkeys(n.strip() for n in out["names"] if n.strip()))
-    result = Plan(names, out["pref"].strip(), out["municipality"].strip(), int(out["near"] or 0),
-                  float(out["km"] or 0), out["reason"].strip())
-    log.info("  llm 的搜尋計畫：%s｜%s（%s）", "、".join(names), result.to_log() or "全日本", result.reason)
-    return result
+    def body(a: PlanAsk) -> str:
+        parts = [_describe(a.place, a.ctx, numbered=True)]
+        if a.history:
+            parts.append("<history>\n" + "\n".join(a.history) + "\n</history>")
+        if a.error:
+            parts.append(f"<error>{a.error}</error>")
+        return "\n".join(parts)
+
+    out = await _ask("plan.md", PLAN_SCHEMA, {a.place.ref: body(a) for a in asks}, usage.PLAN, retry_missing=False)
+    plans = {}
+    for a in asks:
+        x = out.get(a.place.ref)
+        if x is None:
+            plans[a.place.ref] = Plan([], reason=NO_ANSWER, answered=False)
+            continue
+        names = list(dict.fromkeys(n.strip() for n in x["names"] if n.strip()))
+        result = Plan(names, x["pref"].strip(), x["municipality"].strip(), int(x["near"] or 0),
+                      float(x["km"] or 0), x["reason"].strip())
+        plans[a.place.ref] = result
+        log.info("  %s 的搜尋計畫：%s｜%s（%s）", a.place.name_zh, "、".join(names), result.to_log() or "全日本",
+                 result.reason)
+    return plans
 
 
-async def pick(place: PlaceRef, ctx: Context, candidates: list[Candidate], area: Area,
-               widened_from: Area | None = None) -> Pick:
-    """問 llm 候選裡哪一筆是這個地點；回傳它挑的編號（超出範圍當成 0，都不是）和理由。
+async def pick(asks: list[PickAsk]) -> dict[str, Pick]:
+    """一次問 llm 好幾個地點各是哪一筆候選。回傳 地點編號 → 挑的編號（超出範圍或沒回當成 0，都不是）和理由。"""
+    def body(a: PickAsk) -> str:
+        results = "\n".join(f"{i}. {describe_candidate(c, a.ctx.same_day, a.area)}"
+                            for i, c in enumerate(a.candidates, 1))
+        where = a.area.label()
+        if a.widened_from is not None:
+            where += f"（原本是 {a.widened_from.label()}，裡面沒有同名的，自動放寬）"
+        return f"{_describe(a.place, a.ctx)}\n<area>{where}</area>\n<results>\n{results}\n</results>"
 
-    area 是實際查的範圍；widened_from 是自動放寬前的範圍（沒放寬是 None）。
+    out = await _ask("pick.md", PICK_SCHEMA, {a.place.ref: body(a) for a in asks}, usage.PICK)
+    picks = {}
+    for a in asks:
+        x = out.get(a.place.ref)
+        if x is None:
+            picks[a.place.ref] = Pick(0, NO_ANSWER)
+            continue
+        choice = x["choice"] if 1 <= x["choice"] <= len(a.candidates) else 0
+        picks[a.place.ref] = Pick(choice, x["reason"])
+        log.info("  %s %s：%s", a.place.name_zh, f"挑第 {choice} 筆" if choice else "不選", x["reason"])
+    return picks
+
+
+async def web_address(asks: list[WebAsk]) -> dict[str, WebAddress]:
+    """一次請 llm 上網查好幾個地點的日文地址（開 WebSearch、WebFetch）。回傳 地點編號 → 地址。
+
+    `found` 是 true 但地址是空的、或 llm 沒回的地點，當作沒找到。
     """
-    results = "\n".join(f"{i}. {describe_candidate(c, candidates, ctx.same_day, area)}"
-                        for i, c in enumerate(candidates, 1))
-    where = area.label()
-    if widened_from is not None:
-        where += f"（原本是 {widened_from.label()}，裡面沒有同名的，自動放寬）"
-    user = f"{_describe(place, ctx)}\n<area>{where}</area>\n<results>\n{results}\n</results>"
-    out = await llm.call((config.PROMPT_DIR / "pick.md").read_text(), user, PICK_SCHEMA,
-                         config.MODEL, effort=config.EFFORT)
-    choice = out["choice"] if 1 <= out["choice"] <= len(candidates) else 0
-    log.info("  llm 挑第 %s 筆：%s", choice or "0（都不是）", out["reason"])
-    return Pick(choice, out["reason"])
+    out = await _ask("web_address.md", WEB_ADDRESS_SCHEMA,
+                     {a.place.ref: f"{_describe(a.place, a.ctx)}\n<tried>{'、'.join(a.tried)}</tried>" for a in asks},
+                     usage.WEB, tools=WEB_TOOLS)
+    found = {}
+    for a in asks:
+        x = out.get(a.place.ref) or {"found": False, "address": "", "source_url": ""}
+        address, url = x["address"].strip(), x["source_url"].strip()
+        ok = bool(x["found"]) and bool(address)
+        found[a.place.ref] = WebAddress(ok, address if ok else "", url if ok else "")
+        log.info("  %s 上網查地址：%s", a.place.name_zh, f"{address}（{url}）" if ok else "查不到")
+    return found
 
 
-async def web_address(place: PlaceRef, ctx: Context, tried: list[str]) -> WebAddress:
-    """請 llm 上網查這個地點的日文地址（開 WebSearch、WebFetch）。`found` 是 true 但地址是空的，當作沒找到。"""
-    user = f"{_describe(place, ctx)}\n<tried>{'、'.join(tried)}</tried>"
-    out = await llm.call((config.PROMPT_DIR / "web_address.md").read_text(), user, WEB_ADDRESS_SCHEMA,
-                         config.MODEL, effort=config.EFFORT, tools=WEB_TOOLS)
-    address, url = out["address"].strip(), out["source_url"].strip()
-    found = bool(out["found"]) and bool(address)
-    log.info("  上網查地址：%s", f"{address}（{url}）" if found else "查不到")
-    return WebAddress(found, address, url)
+async def _ask(prompt: str, schema: dict, bodies: dict[str, str], part: str, tools: list[str] | None = None,
+               retry_missing: bool = True) -> dict[str, dict]:
+    """把好幾個地點包成 `<item ref="...">…</item>` 一次問，回傳 地點編號 → llm 給那個地點的那一筆。
 
-
-def describe_candidate(c: Candidate, candidates: list[Candidate], same_day: list[Nearby], area: Area) -> str:
-    """`名稱｜來源｜類別｜縣 市區町村 地址｜座標｜離中心「X」N 公里｜離同一天的「X」約 N 公里｜300 公尺內其他候選 N 筆`。
-
-    範圍不是圓就沒有「離中心」；同一天沒有已解析的地點就沒有「離同一天」。
+    llm 回了不認得的編號不管、同一個編號回兩次用第一筆。用量和時間記在 part（`usage`）。
+    retry_missing：有地點沒回，就只拿沒回的再問，最多 `config.RETRIES` 次；還是沒回的不在回傳裡。
     """
-    where = " ".join(x for x in (c.pref, c.municipality, c.address) if x)
-    parts = [c.name, SOURCE_LABELS.get(c.source, c.source), c.category, where, f"{c.lat:.4f}, {c.lon:.4f}"]
+    system = (config.PROMPT_DIR / prompt).read_text()
+    answers: dict[str, dict] = {}
+    todo = dict(bodies)
+    for _ in range(1 + (config.RETRIES if retry_missing else 0)):
+        user = "\n".join(f'<item ref="{ref}">\n{body}\n</item>' for ref, body in todo.items())
+        with usage.part(part):
+            out = await llm_log.call(system, user, schema, part, prompt, tools=tools)
+        assert isinstance(out, dict)   # 有給輸出格式，回的一定是 dict
+        for x in out["places"]:
+            if x["ref"] in todo and x["ref"] not in answers:
+                answers[x["ref"]] = x
+        todo = {ref: body for ref, body in todo.items() if ref not in answers}
+        if not todo:
+            break
+        log.info("  llm 沒有回 %s", "、".join(todo))
+    return answers
+
+
+def describe_candidate(c: Candidate, same_day: list[Nearby], area: Area) -> str:
+    """一筆候選給 llm 看的一行：`名稱｜來源｜類別｜地址｜離中心 N 公里｜離「X」N 公里`。
+
+    地址裡跟範圍一樣的縣、市區町村不寫。範圍不是圓就沒有「離中心」；同一天沒有已解析的地點就沒有「離「X」」。
+    """
+    shown = [x for x, same in ((c.pref, c.pref == area.pref), (c.municipality, c.municipality == area.municipality))
+             if x and not same]
+    where = " ".join([*shown, c.address] if c.address else shown)
+    parts = [c.name, SOURCE_LABELS.get(c.source, c.source), c.category]
+    if where:
+        parts.append(where)
     center = center_km(c, area)
     if center is not None:
-        parts.append(f"離中心「{area.anchor}」{center:.1f} 公里")
+        parts.append(f"離中心 {center:.1f} 公里")
     near = nearest(c, same_day)
     if near:
-        parts.append(f"離同一天的「{near[0]}」約 {near[1]:.1f} 公里")
-    parts.append(f"{config.NEARBY_KM * 1000:g} 公尺內其他候選 {nearby_count(c, candidates)} 筆")
+        parts.append(f"離「{near[0]}」{near[1]:.1f} 公里")
     return "｜".join(parts)
 
 
 def center_km(c: Candidate, area: Area) -> float | None:
     """離圓形範圍中心幾公里；範圍不是圓是 None。"""
     return km(c.lat, c.lon, area.lat, area.lon) if area.is_circle else None
-
-
-def nearby_count(c: Candidate, candidates: list[Candidate]) -> int:
-    """`config.NEARBY_KM` 以內還有幾筆其他候選（不算自己）。"""
-    return sum(1 for o in candidates if o is not c and km(c.lat, c.lon, o.lat, o.lon) <= config.NEARBY_KM)
 
 
 def nearest(c: Candidate, same_day: list[Nearby]) -> tuple[str, float] | None:

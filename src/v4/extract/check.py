@@ -8,12 +8,14 @@ from dataclasses import dataclass
 from functools import cache
 
 from . import config
-from .data_schema import DAY_TYPES, LOCATED_UNKNOWN
+from .data_schema import DAY_TYPES, LOCATED_UNKNOWN, STOP_PREFIX
 
 _HOUR = r"(?:\d|1\d|2[0-3])"
 TIME_RE = re.compile(rf"^{_HOUR}(?:-{_HOUR})?$")
 MONTH_RE = re.compile(r"^(?:[1-9]|1[0-2])$")
 YEAR_RE = re.compile(r"^\d{4}$")
+PLACE_REF_RE = re.compile(r"^p\d+$")
+STOP_RE = re.compile(rf"^([{''.join(STOP_PREFIX)}])(\d+)$")   # 第一次解析的一站：p3、h3
 
 
 @dataclass(frozen=True)
@@ -38,14 +40,25 @@ def time_slots() -> dict[str, str]:
     return slots
 
 
-def check_line(out: dict) -> list[Problem]:
-    """檢查第一次解析（線）的輸出。"""
+def check_line(out: dict, lines: list[str]) -> list[Problem]:
+    """檢查第一次解析（線）的輸出。lines 是主文的每一行（行號從 1 起算）。"""
     problems = _check_places(out["places"], taken=set())
+    for i, p in enumerate(out["places"]):
+        if p["ref"].strip() and not PLACE_REF_RE.match(p["ref"]):
+            problems.append(Problem("places", i, f"ref {p['ref']} 要是 p 加數字（p1、p2）"))
+        if not 1 <= p["line"] <= len(lines):
+            problems.append(Problem("places", i, f"line {p['line']} 不在主文的 1～{len(lines)} 行裡"))
+        elif not lines[p["line"] - 1].strip():
+            problems.append(Problem("places", i, f"line {p['line']} 是空行，要給提到這個地點的那一行"))
     refs = {p["ref"] for p in out["places"]}
     for i, day in enumerate(out["days"]):
-        for ref in day["stops"]:
-            if ref not in refs:
-                problems.append(Problem("days", i, f"stops 的 {ref} 不在 places 裡"))
+        for stop in day["stops"]:
+            m = STOP_RE.match(stop)
+            if not m:
+                problems.append(Problem("days", i, f"stops 的 {stop} 要是 p 或 h 加數字（景點 p3、住宿 h3）"))
+            elif (ref := f"p{m.group(2)}") not in refs:
+                why = "" if ref == stop else f"（沒有 {ref}）"
+                problems.append(Problem("days", i, f"stops 的 {stop} 不在 places 裡{why}"))
         if day["month"] and not MONTH_RE.match(day["month"]):
             problems.append(Problem("days", i, f"month「{day['month']}」要是 1–12 的一個月份，或留空"))
     return problems
@@ -55,7 +68,7 @@ def check_note(out: dict, line: dict) -> list[Problem]:
     """檢查第二次解析（點、段、day_note）的輸出。line 是第一次解析的輸出。"""
     places = {p["ref"]: p for p in [*line["places"], *out["places"]]}
     problems = _check_places(out["places"], taken={p["ref"] for p in line["places"]})
-    labels = {d["label"] for d in line["days"]}
+    total = len(line["days"])
 
     def check_ref(kind: str, i: int, name: str, ref: str) -> None:
         if ref not in places:
@@ -75,8 +88,11 @@ def check_note(out: dict, line: dict) -> list[Problem]:
         problems += _check_text("moves", i, m)
         problems += _check_times("moves", i, m["times"])
     for i, n in enumerate(out["day_notes"]):
-        if n["day"] and n["day"] not in labels:
-            problems.append(Problem("day_notes", i, f"day「{n['day']}」對不到行程的任何一天"))
+        wrong = [d for d in n["days"] if not 1 <= d <= total]
+        if wrong:
+            problems.append(Problem("day_notes", i, f"days 的 {wrong} 不在 1～{total} 裡（`<line>` 每一天的 no）"))
+        if len(set(n["days"])) != len(n["days"]):
+            problems.append(Problem("day_notes", i, "days 有重複的天"))
         problems += _check_text("day_notes", i, n)
     return problems
 

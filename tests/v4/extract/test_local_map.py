@@ -1,4 +1,4 @@
-"""本機地圖：名稱正規化、模糊搜尋（比對結果、好幾個名稱、範圍、同城市、每個來源取幾筆）、縣市對到地圖的寫法、用來源 id 查一筆。"""
+"""本機地圖：名稱正規化、模糊搜尋（比對結果、排序、取幾筆、好幾個名稱、範圍、同城市）、縣市對到地圖的寫法、用來源 id 查一筆。"""
 import pytest
 
 from tests.v4.extract.fakes import SENSOJI, Spot, build_map
@@ -114,7 +114,7 @@ def test_threshold_comes_from_the_setting(small_map):
 
 # ---------- 排序 ----------
 
-def test_better_match_then_higher_similarity_then_shorter_name(small_map):
+def test_exact_before_contains_and_fuzzy_ones_by_similarity(small_map):
     m = small_map(
         Spot("osm", "node/1", "浅草寺の裏の長い名前", "東京都", "台東区", 35.7, 139.7),
         Spot("osm", "node/2", "浅草寺の裏", "東京都", "台東区", 35.7, 139.7),
@@ -122,31 +122,102 @@ def test_better_match_then_higher_similarity_then_shorter_name(small_map):
         Spot("osm", "node/4", "浅草寺", "東京都", "台東区", 35.7, 139.7),
     )
 
+    # 兩筆包含的同分：名稱長短不算，照來源 id
     assert [(c.source_id, c.match) for c in m.search("浅草寺")] == [
-        ("node/4", "完全相同"), ("node/2", "包含"), ("node/1", "包含")]
+        ("node/4", "完全相同"), ("node/1", "包含"), ("node/2", "包含")]
     assert [(c.source_id, c.match) for c in m.search("浅草寺社")] == [
         ("node/4", "模糊"), ("node/3", "模糊"), ("node/2", "模糊")]
 
 
-def test_each_source_keeps_its_top_n(small_map):
-    spots = [Spot(source, f"{source}-{i}", "同名" + "x" * i, "東京都", "台東区", 35.7, 139.7)
-             for source in ("osm", "overture") for i in range(8)]
-    m = small_map(*spots, per_source=5)
+def spot(source_id: str, name: str, source: str = "osm", lat: float = 35.7, lon: float = 139.7, **kw) -> Spot:
+    return Spot(source, source_id, name, "東京都", "台東区", lat, lon, **kw)
 
-    found = m.search("同名")
 
-    assert len(found) == 10
-    assert sorted(c.source_id for c in found) == sorted(
-        [f"osm-{i}" for i in range(5)] + [f"overture-{i}" for i in range(5)])
-    # 合起來照同樣的順序排：完全相同的兩筆在最前面，之後名稱短的在前
-    assert [c.source_id for c in found[:4]] == ["osm-0", "overture-0", "osm-1", "overture-1"]
+def ids(found) -> list[str]:
+    return [c.source_id for c in found]
+
+
+def test_both_sources_are_ranked_together_by_score_and_only_the_top_n_are_kept(small_map):
+    m = small_map(spot("ovt-2", "上野駅前", "overture"),                 # 包含 0.5
+                  spot("node/3", "上野桜木"),                            # 包含 0.5
+                  spot("ovt-1", "上野", "overture"),                     # 完全相同 0
+                  spot("node/2", "東上野", importance=0.37),             # 包含 0.5 − 0.37 = 0.13
+                  spot("node/1", "上野", importance=0.5),                # 完全相同 0 − 0.5
+                  limit=4)
+
+    assert ids(m.search("上野")) == ["node/1", "ovt-1", "node/2", "node/3"]   # 同分的照來源：osm 在前
 
 
 def test_top_n_comes_from_the_setting(small_map, monkeypatch):
-    monkeypatch.setattr(config, "CANDIDATES_PER_SOURCE", 3)
-    m = small_map(*[Spot("osm", f"osm-{i}", "同名" + "x" * i, "東京都", "台東区", 35.7, 139.7) for i in range(5)])
+    monkeypatch.setattr(config, "CANDIDATES", 3)
+    m = small_map(*[spot(f"osm-{i}", "同名" + "x" * i) for i in range(5)])
 
     assert len(m.search("同名")) == 3
+
+
+def test_contains_match_needs_to_be_far_more_famous_to_come_before_an_exact_match(small_map):
+    m = small_map(spot("node/1", "東京タワー", importance=0.45),   # 0.5 − 0.45 = 0.05
+                  spot("node/2", "東京"),                         # 0
+                  spot("node/3", "テレビ東京", importance=0.711))  # 0.5 − 0.711 = −0.211
+
+    assert ids(m.search("東京")) == ["node/3", "node/2", "node/1"]
+
+
+def test_other_kind_is_penalised(small_map):
+    m = small_map(spot("node/1", "上野", category="railway=station", importance=0.567),
+                  spot("relation/2", "上野", category="boundary=administrative", kind="區域", importance=0.506))
+
+    assert ids(m.search("上野", kind="區域")) == ["relation/2", "node/1"]
+    assert ids(m.search("上野", kind="景點")) == ["node/1", "relation/2"]
+    assert ids(m.search("上野")) == ["node/1", "relation/2"]   # 不分種類就照重要度
+
+
+def test_other_kind_with_the_same_name_still_comes_before_a_place_that_only_contains_the_name(small_map):
+    # OSM 沒有「嵐山」這個區域：找區域時，同名的車站（0.5 − 0.364）還是排在只包含名稱的小地名（0.5）前面
+    m = small_map(spot("node/1", "嵐山宮町", kind="區域", category="place=neighbourhood"),
+                  spot("node/2", "嵐山", category="railway=station", importance=0.364))
+
+    assert ids(m.search("嵐山", kind="區域")) == ["node/2", "node/1"]
+
+
+def test_more_famous_comes_first_even_if_farther_from_the_centre(small_map):
+    m = small_map(spot("node/1", "清水寺", lat=35.700, lon=139.700),
+                  spot("way/2", "清水寺", lat=35.705, lon=139.700, importance=0.48))
+    around = Area(anchor="X", lat=35.700, lon=139.700, km=2)
+
+    assert ids(m.search("清水寺", area=around)) == ["way/2", "node/1"]
+
+
+def test_same_score_bigger_comes_first_then_nearer(small_map):
+    m = small_map(spot("node/1", "大石公園", lat=35.703, lon=139.700),
+                  spot("node/2", "大石公園", lat=35.701, lon=139.700),
+                  spot("way/3", "大石公園", lat=35.703, lon=139.700, area_m2=5000))
+    around = Area(anchor="X", lat=35.700, lon=139.700, km=2)
+
+    assert ids(m.search("大石公園", area=around)) == ["way/3", "node/2", "node/1"]
+    assert ids(m.search("大石公園")) == ["way/3", "node/1", "node/2"]   # 行政區範圍沒有距離
+
+
+def test_similarity_only_orders_fuzzy_matches(small_map):
+    # 都是「包含」：相似度比較高的「上野動物園前」不會排到有名的「恩賜上野動物園」前面
+    m = small_map(spot("node/1", "上野動物園前"), spot("way/2", "恩賜上野動物園", importance=0.452))
+
+    assert ids(m.search("上野動物園")) == ["way/2", "node/1"]
+
+
+def test_same_wikidata_is_kept_once(small_map):
+    m = small_map(spot("node/1", "上野", importance=0.567, wikidata="Q1"),
+                  spot("node/2", "上野", importance=0.567, wikidata="Q1", area_m2=100),
+                  spot("node/3", "上野", importance=0.567, wikidata="Q1"),
+                  spot("node/4", "上野"), spot("node/5", "上野"))
+
+    assert ids(m.search("上野")) == ["node/2", "node/4", "node/5"]   # 留面積大的那一筆；沒有 wikidata 的不合併
+
+
+def test_found_place_carries_its_importance(small_map):
+    [c] = small_map(spot("way/1", "浅草寺", importance=0.4567)).search("浅草寺")
+
+    assert c.importance == 0.457
 
 
 def test_same_place_from_both_sources_is_not_merged(local_map):
@@ -158,8 +229,9 @@ def test_same_place_from_both_sources_is_not_merged(local_map):
 def test_several_names_are_searched_together_and_each_place_takes_its_best_match(local_map):
     found = local_map.search(["スカイツリー", "浅草寺", "東京ソラ"])
 
+    # 完全相同的三筆同分，照來源、來源 id
     assert [(c.source_id, c.match) for c in found] == [
-        ("way/1", "完全相同"), ("ovt-sensoji", "完全相同"), ("way/2", "完全相同"), ("way/4", "包含")]
+        ("way/1", "完全相同"), ("way/2", "完全相同"), ("ovt-sensoji", "完全相同"), ("way/4", "包含")]
 
 
 def test_blank_names_are_ignored(local_map):

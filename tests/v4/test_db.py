@@ -4,11 +4,14 @@ import sqlite3
 from v4 import db
 
 TABLES = {"article", "place", "place_source", "place_alias_ja", "place_alias_zh", "place_note", "place_note_time",
-          "day", "day_place", "day_note", "move", "move_time"}
+          "day", "day_place", "day_note", "day_note_day", "move", "move_time"}
 
 
-def tables(conn) -> set[str]:
-    return {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+VIEWS = {"place_note_view", "day_note_view"}
+
+
+def tables(conn, kind: str = "table") -> set[str]:
+    return {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type = ?", (kind,))}
 
 
 def test_missing_database_is_created_with_schema(tmp_path):
@@ -18,6 +21,7 @@ def test_missing_database_is_created_with_schema(tmp_path):
 
     assert path.exists()
     assert tables(conn) == TABLES
+    assert tables(conn, "view") == VIEWS
 
 
 def test_existing_database_is_opened_as_is(tmp_path):

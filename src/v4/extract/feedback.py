@@ -3,32 +3,31 @@ import json
 import logging
 from collections.abc import Callable
 
-from service import llm
-
-from . import config
+from . import config, llm_log
 from .check import Problem
 
 log = logging.getLogger(__name__)
 
 
 async def ask(system: str, user: str, schema: dict,
-              check: Callable[[dict], list[Problem]], label: str = "") -> tuple[dict, list[Problem]]:
+              check: Callable[[dict], list[Problem]], label: str, prompt: str) -> tuple[dict, list[Problem]]:
     """呼叫 llm 並檢查輸出；有問題就把上一次的輸出和問題清單附在後面再問，最多重問 `config.RETRIES` 次。
 
-    label 是這次在做什麼（哪一篇的哪一次解析），只用在 `--verbose` 印的訊息。
+    label 是這次在做什麼（哪一篇的哪一次解析）、prompt 是 system prompt 的檔名，只用在 `--verbose` 印的訊息。
     回傳最後一次的輸出和它還有的問題（沒問題是空的）。llm 呼叫失敗時丟 `service.llm.LLMError`。
     """
-    out = await llm.call(system, user, schema, config.MODEL, effort=config.EFFORT)
+    out = await llm_log.call(system, user, schema, label, prompt)
     problems = check(out)
     for attempt in range(1, config.RETRIES + 1):
         if not problems:
             break
-        log.info("%s：檢查出 %d 個問題，回報 llm 重試第 %d 次（最多 %d 次）\n%s", label, len(problems), attempt,
+        log.info("%s：%d 個問題，重試 %d/%d\n%s", label, len(problems), attempt,
                  config.RETRIES, "\n".join(f"    - {p}" for p in problems))
-        out = await llm.call(system, user + _report(out, problems), schema, config.MODEL, effort=config.EFFORT)
+        out = await llm_log.call(system, user + _report(out, problems), schema,
+                                 f"{label}（重試第 {attempt} 次）", prompt)
         problems = check(out)
     if problems:
-        log.info("%s：重試 %d 次後還有 %d 個問題\n%s", label, config.RETRIES, len(problems),
+        log.info("%s：重試 %d 次後仍有 %d 個問題\n%s", label, config.RETRIES, len(problems),
                  "\n".join(f"    - {p}" for p in problems))
     else:
         log.info("%s：檢查通過", label)

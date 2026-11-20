@@ -23,6 +23,10 @@ LOCATED = (LOCATED_YES, LOCATED_GUESS, LOCATED_UNKNOWN)
 
 DAY_TYPES = ("平日", "假日")
 
+# 行程裡一站的種類（`day_place.type`）
+STAY = "住宿"
+STOP_TYPES = (SPOT, STAY)
+
 # ---------- 整理後的文章 ----------
 
 @dataclass(frozen=True)
@@ -59,8 +63,9 @@ def _array(items: dict) -> dict:
 
 
 _STR = {"type": "string"}
+_INT = {"type": "integer"}
 
-_PLACE = _object({
+_PLACE_FIELDS = {
     "ref": _STR,                                   # 這篇文章裡的編號（p1、p2）
     "name_zh": _STR,
     "name_ja": _STR,
@@ -68,21 +73,24 @@ _PLACE = _object({
     "kind": {"type": "string", "enum": list(KINDS)},
     "located": {"type": "string", "enum": list(LOCATED)},
     "reason": _STR,                                # 猜的：依據；猜不出來：原因
-    "sentence": _STR,                              # 原文提到這個地點的句子，照抄
-})
+}
+_PLACE = _object({**_PLACE_FIELDS, "sentence": _STR})   # sentence：原文提到這個地點的句子，照抄
 
 _TIME = _object({"year": _STR, "month": _STR, "day_type": _STR, "time": _STR})
 
+# 第一次解析為了少輸出：地點給主文的行號（`line`）而不抄句子；一站是一個字串，
+# 景點 `p3`、住宿 `h3`（`STOP_PREFIX`）。`parse_line` 檢查過後轉回 `sentence` 和 `{ref, type}`。
 LINE_SCHEMA = _object({
-    "places": _array(_PLACE),
+    "places": _array(_object({**_PLACE_FIELDS, "line": _INT})),
     "days": _array(_object({"label": _STR, "month": _STR, "stops": _array(_STR)})),
 })
+STOP_PREFIX = {"p": SPOT, "h": STAY}
 
 NOTE_SCHEMA = _object({
     "places": _array(_PLACE),
     "place_notes": _array(_object({"place": _STR, "content": _STR, "times": _array(_TIME)})),
     "moves": _array(_object({"from": _STR, "to": _STR, "content": _STR, "times": _array(_TIME)})),
-    "day_notes": _array(_object({"day": _STR, "content": _STR})),
+    "day_notes": _array(_object({"days": _array(_INT), "content": _STR})),   # days：第幾天（1 起算）
 })
 
 
@@ -102,10 +110,20 @@ class PlaceRef:
 
 
 @dataclass(frozen=True)
+class Stop:
+    ref: str                 # 地點編號
+    type: str                # 景點／住宿
+
+
+@dataclass(frozen=True)
 class Day:
     label: str               # 原文的寫法，只用來對推文，不寫進資料庫
     month: str
-    stops: list[str]         # 地點編號，照原文順序
+    stops: list[Stop]        # 照原文順序
+
+    @property
+    def refs(self) -> list[str]:
+        return [s.ref for s in self.stops]
 
 
 @dataclass(frozen=True)
@@ -133,7 +151,7 @@ class Move:
 
 @dataclass(frozen=True)
 class DayNote:
-    day: str                 # `Day.label`；講整趟的留空
+    days: list[int]          # 講的是第幾天（`Parsed.days` 的順序，1 起算）；講整趟的是空的
     content: str
 
 
@@ -149,15 +167,16 @@ class Parsed:
 
     @classmethod
     def from_llm(cls, line: dict, note: dict, dropped: int = 0) -> "Parsed":
-        """line、note 是照 `LINE_SCHEMA`、`NOTE_SCHEMA` 的輸出（note 是各批合併後的）。"""
+        """line 是 `parse_line.parse` 的回傳（已轉回 `sentence` 和 `{ref, type}`），
+        note 是照 `NOTE_SCHEMA` 的輸出（各批合併後的）。"""
         return cls(
             places=[PlaceRef(**p) for p in [*line["places"], *note["places"]]],
-            days=[Day(d["label"], d["month"], list(d["stops"])) for d in line["days"]],
+            days=[Day(d["label"], d["month"], [Stop(s["ref"], s["type"]) for s in d["stops"]]) for d in line["days"]],
             place_notes=[PlaceNote(n["place"], n["content"], _times(n["times"]))
                          for n in note["place_notes"]],
             moves=[Move(m["from"], m["to"], m["content"], _times(m["times"]))
                    for m in note["moves"]],
-            day_notes=[DayNote(**n) for n in note["day_notes"]],
+            day_notes=[DayNote(list(n["days"]), n["content"]) for n in note["day_notes"]],
             dropped=dropped,
         )
 
@@ -168,10 +187,10 @@ class Parsed:
     def from_dict(cls, d: dict) -> "Parsed":
         return cls(
             places=[PlaceRef(**p) for p in d["places"]],
-            days=[Day(**x) for x in d["days"]],
+            days=[Day(x["label"], x["month"], [Stop(**s) for s in x["stops"]]) for x in d["days"]],
             place_notes=[PlaceNote(**{**n, "times": _times(n["times"])}) for n in d["place_notes"]],
             moves=[Move(**{**m, "times": _times(m["times"])}) for m in d["moves"]],
-            day_notes=[DayNote(**n) for n in d["day_notes"]],
+            day_notes=[DayNote(list(n["days"]), n["content"]) for n in d["day_notes"]],
             dropped=d.get("dropped", 0),
         )
 
@@ -191,7 +210,6 @@ SOURCE_LABELS = {OSM: "OSM", OVERTURE: "Overture"}
 EXACT = "完全相同"
 CONTAINS = "包含"
 FUZZY = "模糊"
-MATCHES = (EXACT, CONTAINS, FUZZY)
 
 
 @dataclass(frozen=True)
@@ -210,6 +228,7 @@ class Candidate:
     boundary: dict | None    # 區域的範圍（geojson），其他是 None
     match: str = ""          # 完全相同／包含／模糊；用來源 id 查到的是空字串
     similarity: float = 0.0  # 跟查詢名稱的 jaro_winkler_similarity（有好幾個查詢名稱時取最高的）
+    importance: float = 0.0  # 維基百科重要度（0–1）；沒有維基條目是 0
 
 
 @dataclass(frozen=True)
@@ -237,11 +256,6 @@ class Area:
             return f"「{self.anchor}」方圓 {self.km:g} 公里"
         return " ".join(x for x in (self.pref, self.municipality) if x) or "全日本"
 
-    def to_log(self) -> dict:
-        if self.is_circle:
-            return {"near": self.anchor, "lat": self.lat, "lon": self.lon, "km": self.km}
-        return {k: v for k, v in (("pref", self.pref), ("municipality", self.municipality)) if v}
-
 
 @dataclass(frozen=True)
 class Nearby:
@@ -260,7 +274,7 @@ class Context:
 
 @dataclass(frozen=True)
 class Resolution:
-    """一個地點的解析結果：place_id 是 None 就是捨棄（解析不到或猜不出來），寫入時照 `store.write_article` 的規則拿掉。"""
+    """一個地點的解析結果：place_id 是 None 就是解析不到（查不到或猜不出來），照樣寫入，place id 留空。"""
     place_id: int | None = None
 
 
@@ -271,8 +285,10 @@ class Report:
     written: list[str] = field(default_factory=list)               # 寫入的文章 id
     skipped: list[tuple[str, str]] = field(default_factory=list)   # (檔案或文章 id, 原因)
     dropped: dict[str, int] = field(default_factory=dict)          # 沒寫進資料庫的東西（`store.DROPPED_KINDS`）→ 筆數
+    dropped_items: list = field(default_factory=list)              # 寫入時拿掉的每一筆（`store.Dropped`）
     unfinished: list[str] = field(default_factory=list)            # 整批停下時還沒做完的文章 id
     error: str | None = None                                       # 整批停下的原因
-    geocode_log: Path | None = None                                # 這次的地點解析 log 檔
-    llm_usage: dict = field(default_factory=dict)                  # 哪一步 → 那一步的 llm 用量（`service.llm.Tally`）
+    log_dir: Path | None = None                                    # 這次的 log 資料夾（`geocode_log`）
+    geocode_traces: list = field(default_factory=list)             # 這次解析過的每個地點（`geocode_log.Trace`）
+    parts: dict = field(default_factory=dict)                      # 各部分 → token 和時間（`usage.Part`）
     seconds: float = 0.0                                           # 整批花的時間

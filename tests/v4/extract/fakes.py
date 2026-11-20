@@ -1,5 +1,6 @@
 """測試用的假實作：小型本機地圖（手寫的十幾筆）、假的國土地理院、假的 llm。都不打網路。"""
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -8,7 +9,7 @@ import duckdb
 from service import llm
 from service.gsi import GsiHit
 from v4.extract import ask_place
-from v4.extract.data_schema import LINE_SCHEMA, NOTE_SCHEMA
+from v4.extract.data_schema import LINE_SCHEMA, NOTE_SCHEMA, SPOT, Stop
 from v4.extract.local_map import SCHEMA, TABLE, normalize
 
 
@@ -27,6 +28,10 @@ class Spot:
     address: str = ""
     names: tuple[str, ...] = ()
     area: bool = False      # 區域而且是多邊形：存範圍
+    importance: float = 0.0
+    wikidata: str | None = None
+    area_m2: float = 0.0
+    confidence: float | None = None
 
     def boundary(self) -> str | None:
         if not self.area:
@@ -62,9 +67,10 @@ def build_map(path: Path, spots=WORLD) -> Path:
     try:
         conn.execute(SCHEMA)
         conn.executemany(
-            f"INSERT INTO {TABLE} VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            f"INSERT INTO {TABLE} VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             [(i, s.source, s.source_id, s.name, list(dict.fromkeys(normalize(n) for n in (s.name, *s.names))),
-              s.category, s.kind, s.pref, s.municipality, s.address, s.lat, s.lon, s.boundary())
+              s.category, s.kind, s.pref, s.municipality, s.address, s.lat, s.lon, s.boundary(),
+              s.wikidata, s.importance, s.area_m2, s.confidence)
              for i, s in enumerate(spots, 1)])
     finally:
         conn.close()
@@ -109,6 +115,8 @@ class FakeLLM:
 
     每一種可以給：一個值（每次都回它）、一個 list（照順序一次回一個，用完報錯）、
     或一個函式（拿到 user 訊息，回傳值；丟例外就是這次呼叫失敗）。
+    plan、pick、web 一次問好幾個地點：每個 `<item>` 各拿一次值（函式拿到的是那個 `<item>` 裡的內容），
+    值是 `SKIP` 就不回那個地點（llm 漏回）。
     pick 沒給時挑第一筆；pick 的值是 `choice`（0 是都不是）。
     plan（搜尋計畫）的值用 `plan(...)` 做；沒給時是 `default_plan`：日文名稱一個、範圍是 `<place>` 的城市當都道府縣。
     web（上網查地址）的值是 `{"found", "address", "source_url"}`，沒給時是查不到。
@@ -129,6 +137,17 @@ class FakeLLM:
         self.calls.append((kind, user))
         self.tools[kind] = list(tools or [])
         llm.record(USAGE)
+        if kind in ("line", "note"):
+            return self._value(kind, user)
+        answers = []
+        for ref, body in re.findall(r'<item ref="([^"]+)">\n(.*?)\n</item>', user, re.S):
+            value = self._value(kind, body)
+            if value is SKIP:
+                continue
+            answers.append({"ref": ref, "reason": "", "choice": value} if kind == "pick" else {"ref": ref, **value})
+        return {"places": answers}
+
+    def _value(self, kind: str, user: str):
         source = self.sources[kind]
         if callable(source):
             value = source(user)
@@ -136,9 +155,10 @@ class FakeLLM:
             value = source.pop(0)
         else:
             value = source
-        if kind == "pick":
-            return {"reason": "", "choice": value}
-        return json.loads(json.dumps(value))   # 每次給一份新的，呼叫的人改了也不影響下一次
+        return value if value is SKIP else json.loads(json.dumps(value))   # 每次給一份新的
+
+
+SKIP = object()   # FakeLLM 的值是它：這個地點不回
 
 
 def plan(*names, pref="", municipality="", near=0, km=0, reason="") -> dict:
@@ -158,8 +178,24 @@ def place(ref, name_zh, name_ja, city="東京", kind="景點", located="是", re
             "located": located, "reason": reason, "sentence": sentence or f"去{name_zh}"}
 
 
+def line_place(ref, name_zh, name_ja, city="東京", kind="景點", located="是", reason="", line=1) -> dict:
+    """第一次解析的 llm 輸出裡 `places[]` 的一筆：給主文的行號，不給句子。"""
+    return {"ref": ref, "name_zh": name_zh, "name_ja": name_ja, "city": city, "kind": kind,
+            "located": located, "reason": reason, "line": line}
+
+
 def day(label, stops, month="") -> dict:
+    """第一次解析的 llm 輸出裡 `days[]` 的一筆。stops 每筆是 `p3`（景點）或 `h3`（住宿）。"""
     return {"label": label, "month": month, "stops": list(stops)}
+
+
+def stops(*refs) -> list[Stop]:
+    """`Day.stops`：每筆是地點編號（景點），或（地點編號，種類）。"""
+    return [Stop(*_ref_type(r)) for r in refs]
+
+
+def _ref_type(s) -> tuple[str, str]:
+    return (s, SPOT) if isinstance(s, str) else tuple(s)
 
 
 def time(year="", month="", day_type="", time="") -> dict:
@@ -174,8 +210,9 @@ def move(origin, dest, content="搭電車 20 分鐘", times=()) -> dict:
     return {"from": origin, "to": dest, "content": content, "times": list(times)}
 
 
-def day_note(day_label, content="這天排太趕") -> dict:
-    return {"day": day_label, "content": content}
+def day_note(days=(), content="這天排太趕") -> dict:
+    """days：第幾天（1 起算），空的是講整趟。"""
+    return {"days": list(days), "content": content}
 
 
 def line(places=(), days=()) -> dict:

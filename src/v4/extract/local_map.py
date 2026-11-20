@@ -8,7 +8,27 @@ llm 寫的縣市名稱先用 `admin_area` 對到地圖裡的寫法，對不到�
 比對：查詢的名稱（可以好幾個）和資料裡的名稱都先 `normalize`；一筆地點拿它每個比對用名稱跟每個查詢名稱比，取最好的結果：
 完全相同 → 包含（地圖上的名稱包含查詢的名稱，查詢至少 2 個字）→ 模糊（jaro_winkler_similarity ≥ 門檻）。
 範圍內只要有一筆完全相同或包含，模糊的就都不列。
-排序：比對結果 → 相似度高 → 離圓心近 → 名稱短。OSM、Overture 各取前 N 筆，合起來照同樣的順序排。
+
+排序：照 Nominatim（`nominatim_api/search/geocoder.py`、`results.py`）的分數，越小越前面：
+
+    分數 = 名稱扣分 − 重要度 ＋ 種類扣分
+
+- 名稱扣分：完全相同 0；包含 `CONTAINS_PENALTY`（Nominatim 只靠部分字詞對上時的扣分：部分詞 0.3＋退回比對 0.2）。
+  「包含」分不出是同一個地點的全名（恩賜上野動物園）還是別的地點（浅草橋），所以要扣分，重要度高很多才排得上來。
+- 重要度：維基百科重要度（Nominatim 的 wikimedia-importance），沒有維基條目是 0。
+- 種類扣分：跟要找的種類（景點／區域）不一樣加 `KIND_PENALTY`；空字串是不分。同名的車站常比同名的地區有名，
+  找區域時不這樣會拿到車站。Nominatim 是直接過濾，這裡只扣分：llm 會判錯，而且有些地方 OSM 沒有區域（嵐山）。
+- 同分：面積大的優先（Nominatim 比外框面積；這裡是多邊形面積，點和線是 0）→ 離圓心近的優先（範圍是圓時）
+  → 照來源、來源 id 固定順序。
+
+跟 Nominatim 不同的地方：
+- 模糊比對 Nominatim 沒有；這裡範圍內完全沒有完全相同或包含時才用，照相似度高低排，再照分數。
+- Nominatim 會丟掉比第一名差 0.5 以上的；這裡不丟，後面還有 llm 挑。
+- Nominatim 給中心點時只看距離；這裡照樣看重要度，距離只在同分時比（重要度分得出哪筆是本尊、哪筆是重複的資料）。
+- 沒有維基條目時 Nominatim 依地點層級給預設重要度（縣 0.29、市 0.19……店家 0）；這裡是 0。
+
+同一個 wikidata 是同一個地點（車站的好幾個節點、行政界和它的 place 節點），只留排最前面的一筆。
+OSM、Overture 一起排，取前 `config.CANDIDATES` 筆。
 """
 import difflib
 import json
@@ -37,7 +57,11 @@ CREATE TABLE {TABLE} (
     address      VARCHAR NOT NULL,
     lat          DOUBLE  NOT NULL,     -- 代表點
     lon          DOUBLE  NOT NULL,
-    boundary     VARCHAR               -- 區域而且是多邊形才有（GeoJSON）
+    boundary     VARCHAR,              -- 區域而且是多邊形才有（GeoJSON）
+    wikidata     VARCHAR,              -- OSM 的 wikidata tag（Q123）；Overture 和沒有的是 NULL
+    importance   DOUBLE  NOT NULL,     -- 維基百科重要度 0–1（Nominatim 的 wikimedia-importance）；沒有維基條目是 0
+    area         DOUBLE  NOT NULL,     -- 多邊形的面積（平方公尺）；點和線是 0
+    confidence   DOUBLE                -- Overture 的 confidence（0–1）；OSM 是 NULL
 )
 """
 
@@ -72,8 +96,6 @@ def city_key(name: str | None) -> str:
     return s[:-1] if len(s) >= 3 and s.endswith(_SUFFIXES) else s
 
 
-_COLUMNS = "source, source_id, name, category, kind, pref, municipality, address, lat, lon, boundary"
-
 # 圓的範圍用的距離（公里）：緯度一度 111.195 公里，經度乘上 cos(緯度)。10 公里內跟球面距離差不到 1%。
 _DISTANCE = "111.195 * sqrt(power(lat - $lat, 2) + power((lon - $lon) * cos(radians($lat)), 2))"
 
@@ -85,12 +107,28 @@ _WHERE = {
 }
 
 
+# 分數的兩個扣分（見模組說明）
+CONTAINS_PENALTY = 0.5
+KIND_PENALTY = 0.5
+
+_SCORE = f"""CASE WHEN b.match_rank = 0 THEN 0 ELSE {CONTAINS_PENALTY} END
+           + CASE WHEN $kind <> '' AND p.kind <> $kind THEN {KIND_PENALTY} ELSE 0 END
+           - p.importance"""
+
+
+def _order(t: str = "") -> str:
+    """排序：模糊的先照相似度 → 分數 → 面積大 → 離圓心近 → 來源、來源 id。t 是欄位前面的表名。"""
+    return (f"CASE WHEN {t}match_rank = 2 THEN -{t}similarity ELSE 0 END, {t}score, {t}area DESC, "
+            f"{t}distance, {t}source, {t}source_id")
+
+
 def _search_sql(where: str, distance: str) -> str:
+    # 先只帶排序要用的窄欄位排好、取前 N 筆，最後才接回名稱、地址、範圍（GeoJSON 很大）
     return f"""
-WITH area AS (
-    SELECT * FROM {TABLE} WHERE {where}
+WITH scope AS (
+    SELECT id, match_names FROM {TABLE} WHERE {where}
 ), names AS (
-    SELECT id, unnest(match_names) AS n FROM area
+    SELECT id, unnest(match_names) AS n FROM scope
 ), best AS (
     SELECT id,
            min(CASE WHEN list_contains($qs, n) THEN 0
@@ -100,20 +138,23 @@ WITH area AS (
     FROM names
     GROUP BY id
 ), hit AS (
-    SELECT a.*, b.match_rank, b.similarity, {distance} AS distance
-    FROM best b JOIN area a USING (id)
+    SELECT p.id, p.source, p.source_id, p.wikidata, p.area, b.match_rank, b.similarity,
+           {distance} AS distance, {_SCORE} AS score
+    FROM best b JOIN {TABLE} p USING (id)
     WHERE b.match_rank < 2 OR b.similarity >= $threshold
 ), kept AS (
-    SELECT * FROM hit WHERE match_rank < 2 OR NOT EXISTS (SELECT 1 FROM hit WHERE match_rank < 2)
-), ranked AS (
-    SELECT *, row_number() OVER (
-        PARTITION BY source ORDER BY match_rank, similarity DESC, distance, length(name), id) AS n
-    FROM kept
+    SELECT * FROM hit
+    QUALIFY match_rank < 2 OR NOT bool_or(match_rank < 2) OVER ()
+), unique_place AS (
+    SELECT * FROM kept
+    QUALIFY row_number() OVER (PARTITION BY COALESCE(wikidata, source || ' ' || source_id) ORDER BY {_order()}) = 1
+), top AS (
+    SELECT * FROM unique_place ORDER BY {_order()} LIMIT $limit
 )
-SELECT {_COLUMNS}, match_rank, similarity
-FROM ranked
-WHERE n <= $per_source
-ORDER BY match_rank, similarity DESC, distance, length(name), source, id
+SELECT t.source, t.source_id, p.name, p.category, p.kind, p.pref, p.municipality, p.address, p.lat, p.lon,
+       p.boundary, p.importance, t.match_rank, t.similarity
+FROM top t JOIN {TABLE} p USING (id)
+ORDER BY {_order("t.")}
 """
 
 
@@ -124,12 +165,12 @@ _SEARCH = {"japan": _search_sql(_WHERE["japan"], "0"), "admin": _search_sql(_WHE
 class LocalMap:
     """唯讀開啟本機地圖。檔案不存在丟 `MissingLocalMap`。"""
 
-    def __init__(self, path: Path | str | None = None, per_source: int | None = None,
+    def __init__(self, path: Path | str | None = None, limit: int | None = None,
                  threshold: float | None = None):
         self.path = Path(path or config.LOCAL_MAP_PATH)
         if not self.path.exists():
             raise MissingLocalMap(f"找不到本機地圖 {self.path}，請先跑 scripts/geo/build_japan.py")
-        self.per_source = per_source or config.CANDIDATES_PER_SOURCE
+        self.limit = limit or config.CANDIDATES
         self.threshold = config.FUZZY_THRESHOLD if threshold is None else threshold
         self.conn = duckdb.connect(str(self.path), read_only=True)
         self._admin_cache: list[tuple[str, str]] | None = None
@@ -137,16 +178,16 @@ class LocalMap:
     def close(self) -> None:
         self.conn.close()
 
-    def search(self, names: str | list[str], area: Area | None = None) -> list[Candidate]:
-        """用一個或幾個日文名稱，在範圍內（沒給是全日本）模糊搜尋。
+    def search(self, names: str | list[str], area: Area | None = None, kind: str = "") -> list[Candidate]:
+        """用一個或幾個日文名稱，在範圍內（沒給是全日本）模糊搜尋，照模組說明的順序回傳最多 N 筆。
 
-        回傳最多 每個來源 N 筆 × 2 的候選，不合併去重。
+        kind：要找的種類（景點／區域），跟它一樣的排前面；空字串是不分。
         """
         qs = list(dict.fromkeys(q for q in (normalize(n) for n in ([names] if isinstance(names, str) else names)) if q))
         if not qs:
             return []
         area = area or Area()
-        params = {"qs": qs, "threshold": self.threshold, "per_source": self.per_source}
+        params = {"qs": qs, "threshold": self.threshold, "limit": self.limit, "kind": kind}
         if area.lat is not None and area.lon is not None and area.km is not None:
             mode = "circle"
             params |= {"lat": area.lat, "lon": area.lon, "km": area.km, "dlat": area.km / 111.0,
@@ -157,7 +198,7 @@ class LocalMap:
         else:
             mode = "japan"
         rows = self.conn.execute(_SEARCH[mode], params).fetchall()
-        return [_candidate(r[:11], _RANK[r[11]], r[12]) for r in rows]
+        return [_candidate(r[:12], _RANK[r[12]], r[13]) for r in rows]
 
     def admin_area(self, pref: str = "", municipality: str = "") -> Area:
         """把 llm 寫的都道府縣、市區町村對到地圖裡的寫法，回傳行政區範圍；兩個都空的是全日本。
@@ -199,11 +240,11 @@ class LocalMap:
 
 
 def _candidate(r, match: str = "", similarity: float = 0.0) -> Candidate:
-    source, source_id, name, category, kind, pref, municipality, address, lat, lon, boundary = r
+    source, source_id, name, category, kind, pref, municipality, address, lat, lon, boundary, importance = r
     return Candidate(source=source, source_id=source_id, name=name, category=category, kind=kind, pref=pref,
                      municipality=municipality, address=address, lat=lat, lon=lon,
                      boundary=json.loads(boundary) if boundary else None, match=match,
-                     similarity=round(float(similarity or 0.0), 4))
+                     similarity=round(float(similarity or 0.0), 4), importance=round(float(importance or 0.0), 3))
 
 
 def _clean(name: str | None) -> str:

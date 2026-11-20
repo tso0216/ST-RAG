@@ -17,6 +17,11 @@ def batches(comments: list[Comment]) -> list[list[Comment]]:
     return [comments[i:i + size] for i in range(0, len(comments), size)] or [[]]
 
 
+def numbered(line: dict) -> dict:
+    """給 llm 看的 `<line>`：每一天前面加上 `no`（第幾天，1 起算），day_note 的 `days` 填它。"""
+    return {**line, "days": [{"no": i, **d} for i, d in enumerate(line["days"], 1)]}
+
+
 def build_messages(article: Article, line: dict, comments: list[Comment], first: bool) -> tuple[str, str]:
     system = (config.PROMPT_DIR / "note.md").read_text().replace(
         config.TIME_SLOTS_MARK, config.TIME_SLOTS_PATH.read_text().strip())
@@ -25,7 +30,7 @@ def build_messages(article: Article, line: dict, comments: list[Comment], first:
         f"標題：{article.title}\n"
         f"發文日期：{article.posted_date}\n\n"
         f"主文：\n<text>\n{article.text}\n</text>\n\n"
-        f"<line>\n{json.dumps(line, ensure_ascii=False, indent=1)}\n</line>\n\n"
+        f"<line>\n{json.dumps(numbered(line), ensure_ascii=False, indent=1)}\n</line>\n\n"
         f"<comments>\n{listing}\n</comments>\n\n"
         f"<scope>{SCOPE_ALL if first else SCOPE_COMMENTS}</scope>"
     )
@@ -45,7 +50,8 @@ async def parse(article: Article, line: dict) -> tuple[dict, int]:
         label = f"{article.id} 第二次解析（點、段、day_note）第 {i + 1}/{len(groups)} 批"
         log.info("%s：%d 則推文", label, len(comments))
         system, user = build_messages(article, line, comments, first=i == 0)
-        out, problems = await feedback.ask(system, user, NOTE_SCHEMA, lambda o: check.check_note(o, line), label=label)
+        out, problems = await feedback.ask(system, user, NOTE_SCHEMA, lambda o: check.check_note(o, line),
+                                             label=label, prompt="note.md")
         while problems:
             for p in problems:
                 log.info("%s：不收入 %s[%d] %s", label, p.kind, p.index,

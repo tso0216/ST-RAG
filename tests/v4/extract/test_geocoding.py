@@ -1,16 +1,18 @@
-"""地點解析：一個地點從「找得到嗎」到有結果，或本機地圖三輪都沒有、上網查地址也沒有。
+"""地點解析：一個地點從「找得到嗎」到有結果，或本機地圖查滿輪數都沒有、上網查地址也沒有。
 
 本機地圖的查詢記成（名稱用「、」接起來, 範圍, 排序用的城市）。
 """
 import asyncio
+import re
 
 import pytest
 
-from tests.v4.extract.fakes import FakeGsi, KING_ASAKUSA, SENSOJI, SKYTREE, plan, web
+from tests.v4.extract import fakes
+from tests.v4.extract.fakes import SKIP, FakeGsi, KING_ASAKUSA, SENSOJI, SKYTREE, plan, web
 from v4 import place as place_table
-from v4.extract import config
+from v4.extract import ask_place, config
 from v4.extract import geocode_log as glog
-from v4.extract.data_schema import Context, Day, Nearby, Parsed, PlaceNote, PlaceRef
+from v4.extract.data_schema import Area, Candidate, Context, Day, Nearby, Parsed, PlaceNote, PlaceRef
 from v4.extract.geocoding import Geocoder
 
 ARTICLE = "M.1.A.AAA"
@@ -26,11 +28,13 @@ class Spy:
     def __init__(self, local_map):
         self.map = local_map
         self.searches: list[tuple[str, str]] = []
+        self.kinds: list[str] = []
 
-    def search(self, names, area=None):
+    def search(self, names, area=None, kind=""):
         names = [names] if isinstance(names, str) else names
         self.searches.append(("、".join(names), area.label() if area else "全日本"))
-        return self.map.search(names, area)
+        self.kinds.append(kind)
+        return self.map.search(names, area, kind)
 
     def admin_area(self, pref="", municipality=""):
         return self.map.admin_area(pref, municipality)
@@ -50,7 +54,7 @@ def resolve(geocoder, p, **ctx):
 
 
 def dropped(geocoder, p) -> str:
-    """解析一個地點，確定被捨棄，回傳 log 記的原因。"""
+    """解析一個地點，確定解析不到，回傳 log 記的原因。"""
     traces: list[glog.Trace] = []
     r = asyncio.run(geocoder.resolve(p, Context(ARTICLE), on_done=traces.append))
     [trace] = traces
@@ -147,7 +151,7 @@ def test_area_still_unusable_after_retries_skips_the_round(conn, setup, monkeypa
     r = resolve(geocoder, ref("淺草寺", "浅草寺"))
 
     assert spy.searches == [("浅草寺", "東京都")]
-    assert "第 1 輪：名稱 浅草寺｜範圍 {'pref': '大坂'}｜範圍不能用：沒有「大坂」" in llm.users("plan")[2]
+    assert "第 1 輪：名稱 浅草寺｜範圍 大坂｜範圍不能用：沒有「大坂」" in llm.users("plan")[2]
     assert source(conn, r.place_id) == ("osm", SENSOJI.source_id)
 
 
@@ -161,7 +165,7 @@ def test_circle_around_a_same_day_place(conn, setup):
     assert spy.searches == [("焼肉きんぐ", "「淺草寺」方圓 1 公里")]
     assert source(conn, r.place_id) == ("overture", KING_ASAKUSA.source_id)
     [user] = llm.users("pick")
-    assert "<area>「淺草寺」方圓 1 公里</area>" in user and "離中心「淺草寺」0.4 公里" in user
+    assert "<area>「淺草寺」方圓 1 公里</area>" in user and "離中心 0.4 公里" in user
 
 
 @pytest.mark.parametrize("given, used", [(0, 0.3), (0.1, 0.3), (2, 2), (50, 10)])
@@ -247,22 +251,36 @@ def test_found_in_round_one_is_added_with_its_source_and_aliases(conn, setup):
     assert aliases(conn, "place_alias_ja") == [(p.id, "スカイツリー")]
     [user] = llm.users("pick")
     assert "晴空塔｜スカイツリー｜東京｜景點" in user and "去晴空塔" in user
-    assert "1. 東京スカイツリー｜OSM｜tourism=attraction｜東京都 墨田区｜35.7101, 139.8107｜300 公尺內其他候選 0 筆" in user
+    assert "1. 東京スカイツリー｜OSM｜tourism=attraction｜墨田区\n" in user
     assert gsi.queries == [] and llm.users("web") == []
 
 
-def test_candidates_show_coordinates_distances_and_how_many_others_are_nearby(conn, setup):
+def test_candidates_show_how_far_they_are_from_the_same_day_places(conn, setup):
     geocoder, spy, llm, gsi = setup(pick=2)
 
     r = resolve(geocoder, ref("淺草寺", "浅草寺"), same_day=[Nearby("晴空塔", SKYTREE.lat, SKYTREE.lon)])
 
     user = llm.users("pick")[0]
-    assert ("1. 浅草寺｜OSM｜amenity=place_of_worship｜東京都 台東区 浅草2-3-1｜35.7148, 139.7967｜"
-            "離同一天的「晴空塔」約 1.4 公里｜300 公尺內其他候選 1 筆") in user
-    assert ("2. 浅草寺｜Overture｜buddhist_temple｜東京都 台東区 東京都台東区浅草2-3-1｜35.7148, 139.7966｜"
-            "離同一天的「晴空塔」約 1.4 公里｜300 公尺內其他候選 1 筆") in user
+    assert "1. 浅草寺｜OSM｜amenity=place_of_worship｜台東区 浅草2-3-1｜離「晴空塔」1.4 公里\n" in user
+    assert "2. 浅草寺｜Overture｜buddhist_temple｜台東区 東京都台東区浅草2-3-1｜離「晴空塔」1.4 公里\n" in user
     # 兩份地圖的同一個地方，挑哪一筆都可以：挑了 Overture 那一筆
     assert source(conn, r.place_id) == ("overture", "ovt-sensoji")
+
+
+def test_candidate_line_leaves_out_the_pref_and_municipality_of_the_area():
+    park = Candidate("osm", "way/4", "鶴舞公園", "leisure=park", "景點", "愛知県", "名古屋市", "", 35.1548, 136.9168, None)
+
+    assert ask_place.describe_candidate(park, [], Area("愛知県", "名古屋市")) == "鶴舞公園｜OSM｜leisure=park"
+    assert ask_place.describe_candidate(park, [], Area("愛知県")) == "鶴舞公園｜OSM｜leisure=park｜名古屋市"
+
+
+def test_search_is_told_the_kind_of_place(conn, setup):
+    geocoder, spy, llm, gsi = setup(pick=1)
+
+    resolve(geocoder, ref("上野", "上野", kind="區域"))
+    resolve(geocoder, ref("晴空塔", "スカイツリー"))
+
+    assert spy.kinds == ["區域", "景點"]
 
 
 def test_area_is_stored_with_its_boundary(conn, setup):
@@ -322,7 +340,8 @@ def test_out_of_range_choice_counts_as_none(conn, setup):
     assert source(conn, r.place_id) == ("osm", SKYTREE.source_id)
 
 
-def test_same_names_and_area_are_not_searched_again(conn, setup):
+def test_same_names_and_area_are_not_searched_again(conn, setup, monkeypatch):
+    monkeypatch.setattr(config, "GEOCODE_ROUNDS", 3)   # 第 3 輪的搜尋計畫才看得到第 2 輪沒查的說明
     geocoder, spy, llm, gsi = setup(plan=[plan("築地場外市場", pref="東京"), plan("築地場外市場", pref="東京都"),
                                           plan(" 築地場外市場", pref="東京")])
 
@@ -333,18 +352,17 @@ def test_same_names_and_area_are_not_searched_again(conn, setup):
     assert r.place_id is None and "<tried>築地場外市場</tried>" in llm.users("web")[0]
 
 
-# ---------- 三輪都沒有：上網查地址 ----------
+# ---------- 查滿輪數都沒有：上網查地址 ----------
 
-def test_three_rounds_without_a_result_then_web_finds_nothing_so_it_is_dropped(conn, setup):
-    geocoder, spy, llm, gsi = setup(plan=[plan("築地場外市場", pref="東京"), plan("築地市場", "築地場外", pref="東京"),
-                                          plan("築地")])
+def test_two_rounds_without_a_result_then_web_finds_nothing_so_it_is_dropped(conn, setup):
+    geocoder, spy, llm, gsi = setup(plan=[plan("築地場外市場", pref="東京"), plan("築地市場", "築地場外", pref="東京")])
 
     assert dropped(geocoder, ref("築地場外市場", "築地場外市場")) == glog.WEB_NOT_FOUND
-    assert spy.searches == [("築地場外市場", "東京都"), ("築地市場、築地場外", "東京都"), ("築地", "全日本")]
-    assert len(llm.users("plan")) == 3
+    assert spy.searches == [("築地場外市場", "東京都"), ("築地市場、築地場外", "東京都")]
+    assert len(llm.users("plan")) == 2
     [user] = llm.users("web")
     assert "<place>築地場外市場｜築地場外市場｜東京｜景點</place>" in user
-    assert "<tried>築地場外市場、築地市場、築地場外、築地</tried>" in user
+    assert "<tried>築地場外市場、築地市場、築地場外</tried>" in user
     assert llm.tools["web"] == ["WebSearch", "WebFetch"] and llm.tools["plan"] == []
     assert gsi.queries == []
     assert conn.execute("SELECT COUNT(*) FROM place").fetchone() == (0,)
@@ -419,7 +437,7 @@ def test_guessed_branch_is_resolved_after_the_others_and_shown_how_far_it_is(con
     parsed = Parsed(
         places=[ref("燒肉 KING", "焼肉きんぐ", located="猜的", ref="p1"), ref("淺草寺", "浅草寺", ref="p2"),
                 ref("沒人提到的地方", "どこか", ref="p3")],
-        days=[Day("D1", "2", ["p1", "p2"])], place_notes=[], moves=[], day_notes=[])
+        days=[Day("D1", "2", fakes.stops("p1", "p2"))], place_notes=[], moves=[], day_notes=[])
 
     place_ids = asyncio.run(geocoder.resolve_article(ARTICLE, parsed))
 
@@ -428,8 +446,8 @@ def test_guessed_branch_is_resolved_after_the_others_and_shown_how_far_it_is(con
     assert "1. 淺草寺（35.7148, 139.7967）" in llm.users("plan")[1]
     king = llm.users("pick")[1]
     assert "<same_day>淺草寺</same_day>" in king
-    assert "焼肉きんぐ 浅草店" in king and "離同一天的「淺草寺」約 0.4 公里" in king
-    assert "離同一天的「淺草寺」約 9.2 公里" in king
+    assert "焼肉きんぐ 浅草店" in king and "離「淺草寺」0.4 公里" in king
+    assert "離「淺草寺」9.2 公里" in king
 
 
 # ---------- 猜不出來 ----------
@@ -451,10 +469,142 @@ def test_only_places_used_by_the_itinerary_notes_or_moves_are_resolved(conn, set
         places=[ref("淺草寺", "浅草寺", ref="p1"), ref("晴空塔", "スカイツリー", ref="p2"),
                 ref("阿美橫町", "アメ横商店街", ref="p3"), ref("餐廳", "レストラン", located="猜不出來", ref="p4"),
                 ref("飯店", "ホテル", located="猜不出來", ref="p5")],
-        days=[Day("D1", "2", ["p1", "p5"])],
+        days=[Day("D1", "2", fakes.stops("p1", "p5"))],
         place_notes=[PlaceNote("p2", "晚上很美", [])], moves=[], day_notes=[])
 
     place_ids = asyncio.run(geocoder.resolve_article(ARTICLE, parsed))
 
     assert spy.searches == [("浅草寺", "東京都"), ("スカイツリー", "東京都")]
     assert set(place_ids) == {"p1", "p2", "p5"} and place_ids["p1"] and place_ids["p2"] and place_ids["p5"] is None
+
+
+# ---------- 一起問 ----------
+
+def article(*places, stops=None) -> Parsed:
+    return Parsed(places=list(places), days=[Day("D1", "2", fakes.stops(*(stops or [p.ref for p in places])))],
+                  place_notes=[], moves=[], day_notes=[])
+
+
+def items(user: str) -> list[str]:
+    """一次呼叫裡問了哪些地點（`<item ref>`）。"""
+    return re.findall(r'<item ref="([^"]+)">', user)
+
+
+def test_places_of_an_article_are_asked_together(conn, setup):
+    geocoder, spy, llm, gsi = setup(pick=1)
+
+    place_ids = asyncio.run(geocoder.resolve_article(ARTICLE, article(
+        ref("淺草寺", "浅草寺", ref="p1"), ref("晴空塔", "スカイツリー", ref="p2"), ref("上野", "上野", ref="p3"))))
+
+    assert all(place_ids.values())
+    assert [(kind, items(user)) for kind, user in llm.calls] == [
+        ("plan", ["p1", "p2", "p3"]), ("pick", ["p1", "p2", "p3"])]
+
+
+def test_batches_have_at_most_the_configured_number_of_places(conn, setup, monkeypatch):
+    monkeypatch.setattr(config, "GEOCODE_BATCH", 2)
+    geocoder, spy, llm, gsi = setup(pick=1)
+
+    asyncio.run(geocoder.resolve_article(ARTICLE, article(
+        ref("淺草寺", "浅草寺", ref="p1"), ref("晴空塔", "スカイツリー", ref="p2"), ref("上野", "上野", ref="p3"))))
+
+    assert [items(u) for u in llm.users("plan")] == [["p1", "p2"], ["p3"]]
+
+
+def test_guessed_places_are_a_later_batch_of_their_own(conn, setup):
+    geocoder, spy, llm, gsi = setup(pick=1)
+
+    asyncio.run(geocoder.resolve_article(ARTICLE, article(
+        ref("燒肉 KING", "焼肉きんぐ", located="猜的", ref="p1"), ref("淺草寺", "浅草寺", ref="p2"),
+        ref("晴空塔", "スカイツリー", ref="p3"))))
+
+    assert [items(u) for u in llm.users("plan")] == [["p2", "p3"], ["p1"]]
+
+
+def test_only_places_not_found_go_on_to_the_next_round_together(conn, setup):
+    def plan_for(body):
+        if "<place>淺草寺" in body:
+            return plan("浅草寺", pref="東京")
+        return plan("どこにもない", pref="東京") if "第 1 輪" not in body else plan("スカイツリー", pref="東京")
+    geocoder, spy, llm, gsi = setup(pick=1, plan=plan_for)
+
+    place_ids = asyncio.run(geocoder.resolve_article(ARTICLE, article(
+        ref("淺草寺", "浅草寺", ref="p1"), ref("晴空塔", "どこにもない", ref="p2"))))
+
+    assert [items(u) for u in llm.users("plan")] == [["p1", "p2"], ["p2"]]
+    assert [items(u) for u in llm.users("pick")] == [["p1"], ["p2"]]   # 第 1 輪 p2 沒有候選，不問挑哪一筆
+    assert source(conn, place_ids["p2"]) == ("osm", SKYTREE.source_id)
+
+
+def test_a_place_found_this_round_is_a_located_same_day_place_next_round(conn, setup):
+    def plan_for(body):
+        if "淺草寺｜浅草寺" in body or "第 1 輪" in body:
+            return plan("浅草寺" if "淺草寺｜浅草寺" in body else "スカイツリー", pref="東京")
+        return plan("どこにもない", pref="東京")
+    geocoder, spy, llm, gsi = setup(pick=1, plan=plan_for)
+
+    asyncio.run(geocoder.resolve_article(ARTICLE, article(
+        ref("淺草寺", "浅草寺", ref="p1"), ref("晴空塔", "どこにもない", ref="p2"))))
+
+    first, second = llm.users("plan")
+    assert "1. 淺草寺（還沒定位，不能當中心）" in first
+    assert "1. 淺草寺（35.7148, 139.7967）" in second
+
+
+def test_places_left_after_the_rounds_ask_the_web_together(conn, setup):
+    geocoder, spy, llm, gsi = setup(web=[web("東京都中央区築地4-16-2"), fakes.WEB_NOT_FOUND])
+
+    place_ids = asyncio.run(geocoder.resolve_article(ARTICLE, article(
+        ref("壽司大", "すし大", ref="p1"), ref("狐狸屋", "きつねや", ref="p2"))))
+
+    [user] = llm.users("web")
+    assert items(user) == ["p1", "p2"]
+    assert place_ids["p1"] and place_ids["p2"] is None
+
+
+def test_place_the_llm_left_out_of_the_pick_answer_is_asked_again(conn, setup):
+    geocoder, spy, llm, gsi = setup(pick=[1, SKIP, 1])
+
+    place_ids = asyncio.run(geocoder.resolve_article(ARTICLE, article(
+        ref("淺草寺", "浅草寺", ref="p1"), ref("晴空塔", "スカイツリー", ref="p2"))))
+
+    assert [items(u) for u in llm.users("pick")] == [["p1", "p2"], ["p2"]]
+    assert all(place_ids.values())
+
+
+def test_place_the_llm_keeps_leaving_out_of_the_pick_answer_counts_as_none(conn, setup, monkeypatch):
+    monkeypatch.setattr(config, "GEOCODE_ROUNDS", 1)
+    geocoder, spy, llm, gsi = setup(pick=lambda body: SKIP)
+
+    traces = []
+    asyncio.run(geocoder.resolve_article(ARTICLE, article(ref("淺草寺", "浅草寺")),
+                                         on_place=lambda no, total, t: traces.append(t)))
+
+    assert len(llm.users("pick")) == 1 + config.RETRIES
+    [t] = traces
+    assert (t.rounds[0]["outcome"], t.rounds[0]["pick_reason"]) == (glog.NONE_PICKED, "llm 沒有回這個地點")
+
+
+def test_place_the_llm_left_out_of_the_plan_answer_is_asked_again_with_a_reason(conn, setup):
+    geocoder, spy, llm, gsi = setup(pick=1, plan=[plan("浅草寺", pref="東京"), SKIP, plan("スカイツリー", pref="東京")])
+
+    place_ids = asyncio.run(geocoder.resolve_article(ARTICLE, article(
+        ref("淺草寺", "浅草寺", ref="p1"), ref("晴空塔", "スカイツリー", ref="p2"))))
+
+    first, second = llm.users("plan")
+    assert items(second) == ["p2"] and "<error>上一次的回覆裡沒有這個地點，這次一定要回。</error>" in second
+    assert all(place_ids.values())
+
+
+def test_progress_counts_places_in_the_order_they_finish(conn, setup):
+    place_table.add(conn, source="osm", source_id="way/2", kind="景點", name_ja="東京スカイツリー", name_zh="晴空塔",
+                    city="東京", lat=SKYTREE.lat, lon=SKYTREE.lon)
+    geocoder, spy, llm, gsi = setup(pick=1)
+    seen = []
+
+    asyncio.run(geocoder.resolve_article(ARTICLE, article(
+        ref("淺草寺", "浅草寺", ref="p1"), ref("晴空塔", "スカイツリー", ref="p2"),
+        ref("飯店", "ホテル", located="猜不出來", ref="p3")),
+        on_place=lambda no, total, t: seen.append((no, total, t.place.name_zh, t.result))))
+
+    assert seen == [(1, 3, "晴空塔", glog.DATABASE), (2, 3, "淺草寺", "地圖-第1輪"), (3, 3, "飯店", glog.DROPPED)]
