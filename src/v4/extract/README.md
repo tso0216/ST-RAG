@@ -165,8 +165,8 @@ llm 漏回某個地點：搜尋計畫漏回的當成範圍不能用，跟範圍�
 | `parse_line.py` | 第一次 llm 解析 | `parse(article)`、`build_messages`、`ParseError` | `feedback`、`check`、`prompts/line.md` |
 | `parse_note.py` | 第二次 llm 解析：分批、合併 | `parse(article, line)` 回傳（合併後的輸出，不收入的筆數）、`batches`、`build_messages` | `feedback`、`check`、`prompts/note.md`、`time_slots.md` |
 | `check.py` | 兩次解析的檢查 | `check_line(out)`、`check_note(out, line)`、`drop(out, problems)`、`Problem`、`time_slots()` | `data_schema`、`config` |
-| `feedback.py` | 呼叫 llm、檢查、有問題重問 | `ask(system, user, schema, check)` 回傳（最後的輸出，還有的問題） | `llm_log` |
-| `llm_log.py` | 呼叫 llm（`v4.extract` 呼叫 llm 都經過這裡），`--verbose` 時把輸入和輸出寫進 log 檔 | `call(system, user, schema, label, prompt, tools)` | `service.llm`、`config` |
+| `feedback.py` | 呼叫 llm、檢查、有問題重問 | `ask(system, user, schema, check, label, prompt, *, model, effort, retries)` 回傳（最後的輸出，還有的問題）；`model`、`effort`、`retries` 沒給時用 `config` 的（抽取都不給，`v4.rag` 給自己的）；`report(out, problems)`（附在重問後面的那段） | `llm_log` |
+| `llm_log.py` | 呼叫 llm（`v4.extract` 呼叫 llm 都經過這裡），`--verbose` 時把輸入和輸出寫進 log 檔 | `call(system, user, schema, label, prompt, tools, *, model, effort)`；`model`、`effort` 沒給時用 `config` 的 | `service.llm`、`config` |
 | `geocoding.py` | 地點解析 | `Geocoder(conn, local_map, gsi, log_file)`：`resolve_article(article_id, parsed, on_place)`、`resolve(place, ctx, on_done)`；`places_to_resolve(parsed)` | `v4.place`、`local_map`、`ask_place`、`geocode_log`、`service.gsi` |
 | `local_map.py` | 本機地圖：名稱正規化、在範圍內模糊搜尋、縣市對到地圖的寫法 | `LocalMap(path)`：`search(names, area)`、`admin_area(pref, municipality)`、`close()`；`normalize`、`city_key`、`SCHEMA`、`MissingLocalMap`、`AreaError` | `duckdb` |
 | `geocode_log.py` | 這次執行的 log 資料夾、地點解析的統計 | `GeocodeLog.start(folder)`：`folder`、`path`（`_run.log`）、`article_path`、`article`、`line`、`run_line`、`progress`、`handler`、`batch`、`write`、`traces`；`RUN_LOG`；`Trace`、`render`、`summarize`、`summary_lines(traces)`、`dropped_lines(traces)`；`result`、`outcome`、`fail_reason` 的值 | `data_schema` |

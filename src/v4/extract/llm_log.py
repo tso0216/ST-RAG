@@ -27,14 +27,16 @@ _first_seen: dict[str, tuple[int, str]] = {}   # system prompt → 第一次用�
 
 
 async def call(system: str, user: str, schema: dict | None, label: str, prompt: str,
-               tools: list[str] | None = None) -> dict | str:
-    """同 `service.llm.call`（模型和 effort 用 `config` 的）。label 是這次在做什麼、prompt 是 system prompt 的檔名
-    （`prompts/` 裡的），都只用在印出來的標題。"""
+               tools: list[str] | None = None, *, model: str | None = None,
+               effort: str | None = None) -> dict | str:
+    """同 `service.llm.call`。model、effort 沒給時用 `config` 的（抽取都不給，問答系統給自己的）。
+    label 是這次在做什麼、prompt 是 system prompt 的檔名（`prompts/` 裡的），都只用在印出來的標題。"""
     no = next(_numbers)
     if log.isEnabledFor(logging.INFO):
         log.info("%s", _input(no, system, user, label, prompt, tools))
     t0 = time.monotonic()
-    out = await llm.call(system, user, schema, config.MODEL, effort=config.EFFORT, tools=tools)
+    out = await llm.call(system, user, schema, config.MODEL if model is None else model,
+                         effort=config.EFFORT if effort is None else effort, tools=tools)
     if log.isEnabledFor(logging.INFO):
         text = out if isinstance(out, str) else json.dumps(out, ensure_ascii=False, indent=1)
         log.info("━━━━━ llm #%d 輸出（%s：%.0f 秒）━━━━━\n%s", no, label, time.monotonic() - t0, text)
