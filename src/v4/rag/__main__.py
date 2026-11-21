@@ -4,9 +4,10 @@
     PYTHONPATH=.:src .venv/bin/python -m v4.rag ask --article data/ptt_ask/itinerary/ptt_M.1767020760.A.E80.json
     PYTHONPATH=.:src .venv/bin/python -m v4.rag index
 
-`ask`：stdout 印答案（Markdown）；`--json` 時改印完整紀錄；`--trace` 把紀錄寫到檔案（出錯時也寫，記下錯誤）；
-`-v` 時 stderr 印出每一步，和每次 llm 的完整輸入和輸出（開 logger `v4`：`v4.rag` 印每一步，
-`v4.extract` 的 `llm_log` 印 llm 的輸入輸出、`feedback` 印重問、`geocoding` 印地點解析的過程）。答完結束代碼 0；中途出錯是 1，錯誤印在 stderr。
+`ask`：stdout 印答案（Markdown）；`--json` 時改印完整紀錄；`--log` 寫看得懂的流程紀錄（`flowlog`，出錯時也寫）：
+主檔用白話寫每一輪查了什麼、為什麼、找到什麼，最後是答案；同資料夾的 `.detail` 檔是參數、每一步的用量，
+和每次 llm 的完整輸入和輸出、重問、地點解析每一輪的過程（跑的時候收集 logger `v4` 的訊息）。
+答完結束代碼 0；中途出錯是 1，錯誤印在 stderr。
 本機地圖不存在時一開始就停下，什麼都不做。
 
 `index`：把資料庫裡每一筆 `place_note` 和 `day_note` 的 embedding 算好（文字的寫法跟 ask 用的一樣），
@@ -14,7 +15,7 @@
 """
 import argparse
 import asyncio
-import logging
+import contextlib
 import sys
 from pathlib import Path
 
@@ -25,7 +26,7 @@ from v4.extract import config as extract_config
 from v4.extract.article import Skipped
 from v4.extract.local_map import LocalMap, MissingLocalMap
 
-from . import config, parse, pipeline, trace
+from . import config, flowlog, parse, pipeline, trace
 from .embedding import CachedEmbedder, EmbeddingError, OpenAIEmbedder
 
 INDEX_CHUNK = 1024   # index 一次算幾段（算完一批就寫進 embedding 表，中途出錯前面的不用重算）
@@ -38,11 +39,9 @@ def main(argv=None) -> int:
     a_ask.add_argument("question", nargs="?", help="一句問題（跟 --article 二選一）")
     a_ask.add_argument("--article", type=Path, help="一篇 PTT 文章 JSON 的路徑（格式同 v4 抽取的輸入）")
     a_ask.add_argument("--db", type=Path, default=None, help=f"資料庫路徑（預設 {config.DB_PATH}）")
-    a_ask.add_argument("--trace", type=Path, help="把完整紀錄寫到這個路徑")
+    a_ask.add_argument("--log", type=Path,
+                       help="把看得懂的流程紀錄寫到這個路徑；每次 llm 的完整輸入和輸出寫在同資料夾的 .detail 檔")
     a_ask.add_argument("--json", action="store_true", help="stdout 印完整紀錄，不印答案的純文字")
-    a_ask.add_argument("--verbose", "-v", action="store_true",
-                       help="stderr 印出每一步：每個節點的條件、候選筆數、時間相符筆數、通過相關判斷筆數，補規劃的決定和理由，"
-                            "以及每次 llm 的完整輸入和輸出、重問的問題、地點解析的過程")
     a_index = sub.add_parser("index", help="先算好資料庫裡每一筆 place_note 和 day_note 的 embedding")
     a_index.add_argument("--db", type=Path, default=None, help=f"資料庫路徑（預設 {config.DB_PATH}）")
     a = ap.parse_args(argv)
@@ -55,12 +54,6 @@ def main(argv=None) -> int:
 
 
 def ask(a: argparse.Namespace) -> int:
-    if a.verbose:
-        handler = logging.StreamHandler(sys.stderr)
-        handler.setFormatter(logging.Formatter("%(message)s"))
-        logger = logging.getLogger("v4")
-        logger.addHandler(handler)
-        logger.setLevel(logging.INFO)
     db_path = a.db or config.DB_PATH
     try:
         local_map = LocalMap(extract_config.LOCAL_MAP_PATH)
@@ -74,16 +67,18 @@ def ask(a: argparse.Namespace) -> int:
         print(f"讀不了 {a.article}：{e}", file=sys.stderr)
         return 1
     conn = db.connect(db_path)
+    capture = flowlog.Capture() if a.log else None
     try:
-        result = asyncio.run(_ask(article, conn, local_map, db_path, a.question))
+        with capture or contextlib.nullcontext():
+            result = asyncio.run(_ask(article, conn, local_map, db_path, a.question))
     except JEVError as e:   # JEV client 建不起來（例如沒有金鑰）
         print(f"錯誤：{e}", file=sys.stderr)
         return 1
     finally:
         conn.close()
         local_map.close()
-    if a.trace:
-        trace.write(a.trace, result.record)
+    if capture is not None:
+        flowlog.write(a.log, result.record, capture.text())
     if a.json:
         print(trace.dumps(result.record))
     if result.error:

@@ -11,7 +11,7 @@
 | 輸入 | `config.DB_PATH`（現在是 `data/test.db`；規格寫 `data/v4.db`，建好後改這一行） | v4 抽取建的資料庫 |
 | 輸入 | `data/geo/japan.duckdb` | 本機地圖（地點解析用），`scripts/geo/build_japan.py` 建 |
 | 輸出 | stdout | 答案（Markdown）；`--json` 時是完整紀錄 |
-| 輸出 | `--trace` 給的路徑 | 完整紀錄（JSON，見「紀錄」） |
+| 輸出 | `--log` 給的路徑 | 看得懂的流程紀錄（文字，見「流程紀錄」）；出錯時也寫 |
 | 輸出 | 資料庫 | 新解析到的地點（`place`、`place_source`、別名表）、`embedding`、`jev_cache` |
 
 LLM 和國土地理院的回應不快取；重現靠紀錄、`jev_cache` 和 `embedding` 表。
@@ -34,7 +34,7 @@ LLM 和國土地理院的回應不快取；重現靠紀錄、`jev_cache` 和 `em
 
 | 檔案 | 做什麼 | 對外提供 | 用到 |
 |---|---|---|---|
-| `__main__.py` | 命令列：`ask`、`index` | `main(argv)` 回傳結束代碼、`index_texts(conn)` | `pipeline`、`parse`、`trace`、`embedding`、`config` |
+| `__main__.py` | 命令列：`ask`、`index` | `main(argv)` 回傳結束代碼、`index_texts(conn)` | `pipeline`、`parse`、`trace`、`flowlog`、`embedding`、`config` |
 | `pipeline.py` | 一篇發問文的主流程、錯誤處理、組紀錄 | `Services`、`Result`、`run_article(article, services, *, db_path, question_text)`、`question`、`ERRORS`、`params()` | 其他所有模組 |
 | `config.py` | 路徑、模型、所有參數（規格 17） | `DB_PATH`、`PROMPT_DIR`、`MODEL`、`EFFORT`、`SUMMARIZE_MODEL`、`RETRIES`、`PLAN_RETRIES`、`JEV_*`、`LLM_CONCURRENCY`、`EMBEDDING_MODEL`、`EMBED_TOP`、`DAY_TOP`、`REPLAN_ROUNDS`、`REPLAN_NODES`、`MAX_NODES`、固定文字 | — |
 | `data_schema.py` | 各步驟之間傳的資料結構、給 LLM 的輸出格式 | 見「資料怎麼傳」 | — |
@@ -55,7 +55,8 @@ LLM 和國土地理院的回應不快取；重現靠紀錄、`jev_cache` 和 `em
 | `status.py` | ⑥ | `add_batch`、`table`、`todos`、`no_data`、`should_replan`、`snapshot`、`result_brief` | `validate.diff` |
 | `replan.py` | ⑦ | `replan(article, question, ctx, state)`、`build_user`、`budget` | `plan`、`status` |
 | `answer.py` | ⑧ | `answer(question, ctx, state, stop_reason, *, general)`、`merge`、`build_user`、`cited` | `plan`、`status`、`summarize`、`llm_log` |
-| `trace.py` | 紀錄 | `step(label, model)`、`Calls`、`node_record`、`result_record`、`dropped_record`、`write`、`dumps` | `service.llm` |
+| `trace.py` | 紀錄 | `step(label, model)`、`Calls`、`node_record`、`result_record`、`dropped_record`、`dumps` | `service.llm` |
+| `flowlog.py` | 把紀錄寫成看得懂的流程紀錄（`--log`） | `render(record, detail_name)`、`render_detail(record, details)`、`write(path, record, details)`、`detail_path`、`Capture` | `data_schema` |
 | `prompts/*.md` | `split.md`、`plan.md`、`summarize.md`、`replan.md`、`answer.md`、`general.md`，都是 system prompt | — | — |
 
 沿用 v4 抽取（不改行為）：`article.load`、`parse_line.parse`、`Geocoder`、`LocalMap`、`feedback.ask`（多了 `model`、`effort`、`retries`）、`llm_log.call`（多了 `model`、`effort`）、`check.Problem`。外部服務在專案根目錄的 `service/`：`llm.py`、`jev.py`、`gsi.py`、`env.py`。
@@ -118,8 +119,8 @@ LLM 的輸出格式只在 `data_schema.py` 定義：`SPLIT_SCHEMA`、`PLAN_SCHEM
 ```bash
 # 問一句問題
 PYTHONPATH=.:src .venv/bin/python -m v4.rag ask "10 月帶長輩，Day3 明治神宮 → 淺草寺 → 東京晴空塔，會不會太趕？"
-# 回答一篇發問文，紀錄寫到檔案，stderr 印每一步和每次 llm 的輸入輸出
-PYTHONPATH=.:src .venv/bin/python -m v4.rag ask --article data/ptt_ask/itinerary/ptt_M.1767020760.A.E80.json --trace /tmp/trace.json -v
+# 回答一篇發問文，流程紀錄寫到檔案（/tmp/ask.log 白話寫每一輪查了什麼；/tmp/ask.detail.log 是每次 llm 的完整輸入和輸出）
+PYTHONPATH=.:src .venv/bin/python -m v4.rag ask --article data/ptt_ask/itinerary/ptt_M.1767020760.A.E80.json --log /tmp/ask.log
 # 先算好每一筆 place_note 和 day_note 的 embedding（可以不跑，ask 用到沒算過的會自己算）
 PYTHONPATH=.:src .venv/bin/python -m v4.rag index
 ```
@@ -141,7 +142,7 @@ PYTHONPATH=.:src .venv/bin/python -m v4.eval run data/ptt_ask/itinerary
 
 ## 紀錄
 
-`--trace`、`--json`、評估存的都是 `pipeline.run_article` 回傳的 `Result.record`：
+`--json`、`--log`、評估用的都是 `pipeline.run_article` 回傳的 `Result.record`：
 
 | 鍵 | 內容 |
 |---|---|
@@ -151,6 +152,15 @@ PYTHONPATH=.:src .venv/bin/python -m v4.eval run data/ptt_ask/itinerary
 | `每一題[]` | 題型、走哪一條路；`每一輪[]`：`計畫`（③ 或 ⑦ 的輸入、每次的輸出、每次檢查出的問題、地點解析、通過和拿掉的節點）、`節點`（條件和結果：筆數、證據的編號和分數和標記、整理重點、其他條件下的筆數、天、排法的計算）、這一輪結束時的查詢狀態表、還沒查的事、查無資料清單、排法的計算；`為什麼停`、`合成`（輸入）、`答案` |
 | `用量` | LLM 每次呼叫的步驟、模型、token、估計金額、時間和合計；JEV 問了幾次、讀快取幾次；embedding 送了幾段文字；總時間 |
 | `答案`、`錯誤` | 合併好的答案；出錯時只有 `錯誤` |
+
+## 流程紀錄
+
+`ask --log 路徑` 寫兩個檔案，`flowlog.py` 從上面的紀錄組出來：
+
+| 檔案 | 內容 |
+|---|---|
+| 主檔（`--log` 給的路徑） | 白話：問題、題目、提到的地點、你的行程；每一輪地點對到哪、要查什麼（想知道什麼、為什麼）、拿掉的、結果（✓ 找到幾筆和前 3 點重點，✗ 是資料庫沒有、時間對不上還是不相關）、還缺什麼；停下來的原因、回答用到哪些節點、答案；出錯；花費 |
+| 細節檔（檔名加 `.detail`，`ask.log` → `ask.detail.log`） | 參數、每一步的 LLM 用量；跑的時候 logger `v4` 的訊息：每次 llm 的完整輸入和輸出（同一段 system prompt 只寫一次全文）、重問、地點解析每一輪怎麼查、怎麼挑 |
 
 ## 要改某件事時去哪個檔案
 
@@ -170,5 +180,6 @@ PYTHONPATH=.:src .venv/bin/python -m v4.eval run data/ptt_ask/itinerary
 | ⑦ 看到什麼 | `replan.build_user`、`status.result_brief` |
 | ⑧ 看到什麼、合併的格式 | `answer.build_user`、`answer.merge` |
 | 紀錄的內容 | `pipeline.py`（結構）、`trace.py`（節點、結果的寫法） |
-| `-v` 印的訊息 | 各模組的 `log.info(...)`；`__main__.ask` 開 logger `v4`：`v4.rag.<模組>` 印每一步，`v4.extract.llm_log` 印每次 llm 的完整輸入和輸出（同一段 system prompt 只印一次全文），`v4.extract.feedback` 印重問，`v4.extract.geocoding`、`ask_place` 印地點解析的過程 |
+| 流程紀錄（`--log`）的寫法 | `flowlog.py` |
+| 流程紀錄細節檔的訊息 | 各模組的 `log.info(...)`；`__main__.ask` 用 `flowlog.Capture` 收 logger `v4` 的訊息：`v4.rag.<模組>` 印每一步，`v4.extract.llm_log` 印每次 llm 的完整輸入和輸出（同一段 system prompt 只印一次全文），`v4.extract.feedback` 印重問，`v4.extract.geocoding`、`ask_place` 印地點解析的過程 |
 | 命令列參數、結束代碼 | `__main__.py` |
