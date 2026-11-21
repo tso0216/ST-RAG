@@ -4,7 +4,7 @@
   用 ContextVar，同時跑的好幾個節點各記各的。
 - `Calls`：交給 `service.llm.track()` 的 `Tally`，另外記下每次呼叫的步驟、模型、token、估計金額、時間。
 - `node_record`、`result_record`、`dropped_record`：節點、節點結果、拿掉的節點寫成紀錄的樣子。
-- `write`：寫成 JSON 檔。
+- `dumps`：寫成 JSON 字串（`--json`）。
 
 紀錄的整體結構由 `pipeline.py` 組，這裡只放共用的寫法。
 """
@@ -14,7 +14,6 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import asdict, dataclass, field
-from pathlib import Path
 
 from service import llm
 
@@ -116,11 +115,6 @@ def result_record(r: NodeResult) -> dict:
 def dropped_record(d: Dropped) -> dict:
     return {"第幾個": d.index, "第幾輪": d.round, "原因": d.why, "說明": d.reason, "節點": d.label,
             "LLM 的輸出": d.raw}
-
-
-def write(path: Path, record: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(dumps(record) + "\n", encoding="utf-8")
 
 
 def dumps(record: dict) -> str:
