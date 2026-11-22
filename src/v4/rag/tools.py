@@ -456,6 +456,12 @@ class Index:
         return frozenset({pid} | {q.id for q in self.places.values()
                                   if q.kind == SPOT and km_between(c, q) <= km})
 
+    def containing_areas(self, pid: int) -> list[Place]:
+        """範圍包含這個地點位置的區域（不含它自己），小的在前。"""
+        p = self.places[pid]
+        return sorted((a for a in self.places.values()
+                       if a.id != pid and a.kind == AREA and a.polygons and inside(p, a)), key=lambda a: a.size)
+
     def counts(self, ids: frozenset[int] | set[int]) -> tuple[int, int, int]:
         """點、段、天的筆數。"""
         points = sum(self.note_count[i] for i in ids)
@@ -557,7 +563,8 @@ class PlaceCond:
         return self.ids is None or (pid is not None and pid in self.ids)
 
 
-def place_cond(idx: Index, arg: Any, param: str) -> PlaceCond:
+def place_cond(idx: Index, arg: Any, param: str, with_areas: bool = False) -> PlaceCond:
+    """`with_areas`：周圍另外收包含中心的區域（移動的起訖常寫成城市，見規格 3.2）。"""
     if not isinstance(arg, dict) or arg.get("mode") not in ("地點", "周圍", "不限"):
         raise ToolError(f'{param} 要是 {{"mode": "地點", "place_id": id}}、'
                         f'{{"mode": "周圍", "place_id": id, "km": 半徑}} 或 {{"mode": "不限"}}')
@@ -574,7 +581,9 @@ def place_cond(idx: Index, arg: Any, param: str) -> PlaceCond:
     if not isinstance(km, (int, float)) or isinstance(km, bool) or km <= 0:
         raise ToolError(f"{param}.km 要是大於 0 的數字（公里）。走路到得了的通常 0.5–1，搭車或開車到得了的大得多")
     ids = idx.around(p.id, float(km))
-    return PlaceCond(ids, f"{p.name}周圍 {km:g} 公里（{len(ids)} 個地點）", True)
+    areas = idx.containing_areas(p.id) if with_areas else []
+    extra = f"＋所在區域 {'、'.join(a.name for a in areas)}" if areas else ""
+    return PlaceCond(ids | {a.id for a in areas}, f"{p.name}周圍 {km:g} 公里（{len(ids)} 個地點{extra}）", True)
 
 
 def query_arg(args: dict, required: bool, why: str) -> str:
@@ -1042,11 +1051,13 @@ def search_notes(env: Env, args: dict) -> str:
 
 SEARCH_MOVES = """查從一地到另一地的移動經驗（怎麼去、要多久、轉乘、路況、擁擠、帶行李）。起點、終點可以有一端不限。"""
 
+MOVE_AROUND_DESC = "。這裡的周圍另外包含中心所在的區域（例如車站所在的城市），因為移動的起訖常寫成城市"
+
 SEARCH_MOVES_SCHEMA = {
     "type": "object",
     "properties": {
-        "origin": {**PLACE_COND_SCHEMA, "description": "起點的" + PLACE_COND_DESC},
-        "dest": {**PLACE_COND_SCHEMA, "description": "終點的" + PLACE_COND_DESC},
+        "origin": {**PLACE_COND_SCHEMA, "description": "起點的" + PLACE_COND_DESC + MOVE_AROUND_DESC},
+        "dest": {**PLACE_COND_SCHEMA, "description": "終點的" + PLACE_COND_DESC + MOVE_AROUND_DESC},
         "both_ways": {"type": "boolean", "description":
                       "true 時，從終點到起點的經驗也回傳，標「方向相反」；預設 false。移動時間、交通方式通常兩個方向差不多；人潮、上下坡、塞車就要看方向"},
         "time": TIME_SCHEMA,
@@ -1069,8 +1080,8 @@ def move_line(idx: Index, m: MoveRow, unknown: list[str], reverse: bool) -> str:
 
 def search_moves(env: Env, args: dict) -> str:
     idx = env.index
-    origin = place_cond(idx, args.get("origin"), "origin")
-    dest = place_cond(idx, args.get("dest"), "dest")
+    origin = place_cond(idx, args.get("origin"), "origin", with_areas=True)
+    dest = place_cond(idx, args.get("dest"), "dest", with_areas=True)
     both = args.get("both_ways", False)
     if not isinstance(both, bool):
         raise ToolError("both_ways 要是 true 或 false")
