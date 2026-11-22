@@ -11,4 +11,4 @@ src/strag_v3/eval/baseline/chunks.db
 .scratch
 docs
 data/*
-!data/test.db
+!data/main.db
