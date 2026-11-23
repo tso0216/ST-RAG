@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ST-RAG</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+        integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="is-empty">
+  <aside id="panel">
+    <div id="toolbar"><button type="button" id="clear">清空</button></div>
+    <div id="thread" aria-live="polite"></div>
+    <div id="examples">
+      <button type="button">Hi</button>
+      <button type="button">名古屋市區有哪些值得去的地方？</button>
+      <button type="button">成田機場到新宿怎麼去比較方便？</button>
+      <button type="button">京都一天排嵐山 → 金閣寺 → 北野天滿宮，會不會太趕？</button>
+      <button type="button">2 月去京都，清水寺和伏見稻荷大社排同一天會不會太趕？</button>
+    </div>
+    <form id="composer">
+      <textarea id="input" rows="1" placeholder="輸入問題" aria-label="問題"></textarea>
+      <button id="send" type="submit" aria-label="送出" disabled>↑</button>
+    </form>
+  </aside>
+
+  <main id="stage">
+    <div id="map"></div>
+    <aside id="evidence" hidden>
+      <button type="button" id="evidence-close" aria-label="關閉">×</button>
+      <div id="evidence-list"></div>
+    </aside>
+  </main>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+          integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+  <script type="module" src="/static/app.js"></script>
+</body>
+</html>

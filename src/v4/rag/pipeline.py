@@ -124,11 +124,16 @@ async def run(article: Article, db_path: Path, log: Log, *, question_only: bool 
     log.input(article, question_only)
     local_map = LocalMap(local_map_path)          # 不存在丟 MissingLocalMap
     conn = db.connect(db_path)
+    parsing = asyncio.create_task(parse_itinerary(conn, local_map, article))   # 跟拆題同時跑；拆出 0 題就取消
     try:
-        parts, itinerary = await asyncio.gather(split(article), parse_itinerary(conn, local_map, article))
+        parts = await split(article, question_only)
         log.split(parts.questions, parts.retries, usage_line(parts.tally.input_tokens, parts.tally.output_tokens,
                                                               parts.tally.cost_usd, parts.seconds))
-        env, place_lines, day_lines, usage, summary = itinerary
+        if not parts.questions:
+            log.no_question(config.NO_QUESTION_TEXT)
+            return config.NO_QUESTION_TEXT
+        env, place_lines, day_lines, usage, summary = await parsing
+        log.attach(env)
         log.itinerary(place_lines, day_lines, usage, summary)
 
         system = system_prompt()
@@ -143,5 +148,9 @@ async def run(article: Article, db_path: Path, log: Log, *, question_only: bool 
         return "\n\n".join(f"### 第 {n} 題：{a.question}\n\n{a.outcome.answer.strip()}"
                            for n, a in enumerate(answers, 1))
     finally:
-        conn.close()
-        local_map.close()
+        parsing.cancel()
+        try:
+            await asyncio.gather(parsing, return_exceptions=True)   # 等它停下才能關連線
+        finally:
+            conn.close()
+            local_map.close()

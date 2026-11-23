@@ -49,6 +49,9 @@ class Log:
 
     # ---------- 各段落 ----------
 
+    def attach(self, env) -> None:
+        """行程解析完、開始答題前呼叫。這裡用不到；網頁版（`v4.web`）靠它拿到 `Env` 查座標。"""
+
     def input(self, article: Article, question_only: bool) -> None:
         if question_only:
             self._file("# 輸入", f"問題：{article.text}", "")
@@ -59,6 +62,11 @@ class Log:
         self._file("# 拆題", *(f"{i}. {q}" for i, q in enumerate(questions, 1)),
                    *(f"重問 {i} 次：{r}" for i, r in enumerate(retries, 1)), usage, "")
         self._say(f"拆題：{len(questions)} 題")
+
+    def no_question(self, text: str) -> None:
+        """一句話裡沒有在問事情：不解析行程、不跑迴圈，直接回這段文字。"""
+        self._file("# 回覆", text, "")
+        print(f"{text}\n", file=self.out, flush=True)
 
     def itinerary(self, place_lines: list[str], day_lines: list[str], usage: str, summary: str) -> None:
         self._file("# 行程", "｜".join(place_lines) or "（沒有地點）",

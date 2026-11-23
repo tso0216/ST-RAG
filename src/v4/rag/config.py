@@ -22,3 +22,4 @@ EMBEDDING_BATCH = 128           # 一次最多送幾段給 OpenAI
 
 OVER_LIMIT_TEXT = "這一題查了太多次，沒有答完。"
 NO_EVIDENCE_OPENING = "資料庫沒有相關的旅客經驗，以下是一般知識"
+NO_QUESTION_TEXT = "可以問我日本旅遊的行程、交通或景點，我會用旅客的經驗回答。"

@@ -30,15 +30,15 @@ def user_message(article: Article) -> str:
     return f"標題：{article.title}\n發文日期：{article.posted_date}\n\n主文：\n{article.text}"
 
 
-def problems_of(out: dict) -> list[str]:
+def problems_of(out: dict, question_only: bool = False) -> list[str]:
     questions = out.get("questions") or []
-    if not questions:
+    if not questions and not question_only:
         return ["至少要有一題"]
     return [f"第 {i} 題問句是空的" for i, q in enumerate(questions, 1) if not (q.get("text") or "").strip()]
 
 
-async def split(article: Article) -> Split:
-    """LLM 出錯時丟 `llm.LLMError`。"""
+async def split(article: Article, question_only: bool = False) -> Split:
+    """`question_only`（輸入是一句話）時可以拆出 0 題；文章拆不出來就把整篇當一題。LLM 出錯時丟 `llm.LLMError`。"""
     system = (config.PROMPT_DIR / "split.md").read_text()
     user = user_message(article)
     started = time.monotonic()
@@ -46,7 +46,7 @@ async def split(article: Article) -> Split:
     with llm.track(result.tally):
         out = await llm.call(system, user, SCHEMA, config.MODEL, config.EFFORT)
         for _ in range(config.RETRIES):
-            problems = problems_of(out)
+            problems = problems_of(out, question_only)
             if not problems:
                 break
             result.retries.append("；".join(problems))
@@ -56,5 +56,5 @@ async def split(article: Article) -> Split:
             out = await llm.call(system, retry, SCHEMA, config.MODEL, config.EFFORT)
     result.seconds = time.monotonic() - started
     texts = [t for q in out.get("questions") or [] if (t := (q.get("text") or "").strip())]
-    result.questions = texts or [article.text.strip()]
+    result.questions = texts if question_only else texts or [article.text.strip()]
     return result

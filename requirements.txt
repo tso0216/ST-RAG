@@ -4,3 +4,5 @@ beautifulsoup4
 typesafe-sdk==0.7.5
 duckdb
 numpy
+starlette
+uvicorn
