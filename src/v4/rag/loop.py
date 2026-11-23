@@ -30,7 +30,7 @@ class Outcome:
     answer: str
     stop: str               # 答完／碰到回合上限
     calls: int
-    turns: int
+    turns: int              # 呼叫工具的回合數，跟 log 的「## 回合 N」同一套數法（不是 SDK 的 num_turns）
     input_tokens: int
     output_tokens: int
     cost_usd: float
@@ -94,6 +94,7 @@ async def run(env: Env, system: str, first_message: str, log: Log) -> Outcome:
     started = time.monotonic()
     result: ResultMessage | None = None
     turn, no, new_turn, last_id = 0, 0, True, None
+    tool_turns = 0                           # 最後一個呼叫工具的回合
     pending: list[str] = []                  # 這一回合還沒確定是判斷還是答案的文字
     uses: dict[str, tuple[int, int, str, dict]] = {}
 
@@ -115,6 +116,7 @@ async def run(env: Env, system: str, first_message: str, log: Log) -> Outcome:
                     elif isinstance(block, ToolUseBlock):
                         flush()
                         no += 1
+                        tool_turns = turn
                         name = block.name.removeprefix(f"mcp__{SERVER}__")
                         uses[block.id] = (turn, no, name, block.input)
             elif isinstance(msg, UserMessage) and isinstance(msg.content, list):
@@ -143,5 +145,5 @@ async def run(env: Env, system: str, first_message: str, log: Log) -> Outcome:
     usage = result.usage or {}
     input_tokens = sum(usage.get(k) or 0 for k in
                        ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"))
-    return Outcome(answer, stop, counter[0], result.num_turns, input_tokens, usage.get("output_tokens") or 0,
+    return Outcome(answer, stop, counter[0], tool_turns, input_tokens, usage.get("output_tokens") or 0,
                    result.total_cost_usd or 0.0, time.monotonic() - started)
