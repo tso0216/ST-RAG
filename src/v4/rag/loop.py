@@ -57,7 +57,7 @@ def build_server(env: Env, counter: list[int]):
                     out = await out
             except ToolError as e:
                 return _error(str(e))
-            except Exception as e:      # 外部服務（OpenAI、國土地理院、本機地圖、地點解析的 LLM）出錯
+            except Exception as e:      # 外部服務（embedding、國土地理院、本機地圖、地點解析的 LLM）出錯
                 return _error(f"外部服務出錯（{type(e).__name__}）：{e}")
             return {"content": [{"type": "text", "text": out}]}
 
@@ -73,12 +73,12 @@ def _text(content) -> str:
     return "\n".join(c.get("text", "") for c in content or [] if isinstance(c, dict))
 
 
-async def run(env: Env, system: str, first_message: str, log: Log) -> Outcome:
-    """跑一題；LLM 出錯（碰到回合上限以外）丟 `LLMError`。"""
+async def run(env: Env, system: str, first_message: str, log: Log, model: str | None = None) -> Outcome:
+    """跑一題；`model` 沒給用 `config.MODEL`。LLM 出錯（碰到回合上限以外）丟 `LLMError`。"""
     os.environ.pop("ANTHROPIC_API_KEY", None)   # 走訂閱額度，跟 service/llm.py 一樣
     counter = [0]
     options = ClaudeAgentOptions(
-        model=config.MODEL,
+        model=model or config.MODEL,
         system_prompt=system,
         tools=[],
         mcp_servers={SERVER: build_server(env, counter)},

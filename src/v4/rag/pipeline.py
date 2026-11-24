@@ -119,14 +119,17 @@ def system_prompt() -> str:
 
 
 async def run(article: Article, db_path: Path, log: Log, *, question_only: bool = False,
-              local_map_path: Path | None = None) -> str:
-    """跑完一篇，回傳合併後的答案（Markdown）。每題的答案也會隨跑隨交給 `log`。"""
+              local_map_path: Path | None = None, model: str | None = None) -> str:
+    """跑完一篇，回傳合併後的答案（Markdown）。每題的答案也會隨跑隨交給 `log`。
+
+    `model` 換掉拆題和工具迴圈的模型（沒給用 `config.MODEL`）；行程解析照 `v4.extract.config`。
+    """
     log.input(article, question_only)
     local_map = LocalMap(local_map_path)          # 不存在丟 MissingLocalMap
     conn = db.connect(db_path)
     parsing = asyncio.create_task(parse_itinerary(conn, local_map, article))   # 跟拆題同時跑；拆出 0 題就取消
     try:
-        parts = await split(article, question_only)
+        parts = await split(article, question_only, model)
         log.split(parts.questions, parts.retries, usage_line(parts.tally.input_tokens, parts.tally.output_tokens,
                                                               parts.tally.cost_usd, parts.seconds))
         if not parts.questions:
@@ -141,7 +144,7 @@ async def run(article: Article, db_path: Path, log: Log, *, question_only: bool 
         for n, question in enumerate(parts.questions, 1):
             env.question = question
             log.question(n, question)
-            out = await loop.run(env, system, first_message(article, env, question), log)
+            out = await loop.run(env, system, first_message(article, env, question), log, model)
             log.answer(n, question, out.answer, out.stop, out.calls, out.turns,
                        usage_line(out.input_tokens, out.output_tokens, out.cost_usd, out.seconds))
             answers.append(Answer(question, out))

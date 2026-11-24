@@ -37,14 +37,14 @@ def problems_of(out: dict, question_only: bool = False) -> list[str]:
     return [f"第 {i} 題問句是空的" for i, q in enumerate(questions, 1) if not (q.get("text") or "").strip()]
 
 
-async def split(article: Article, question_only: bool = False) -> Split:
+async def split(article: Article, question_only: bool = False, model: str | None = None) -> Split:
     """`question_only`（輸入是一句話）時可以拆出 0 題；文章拆不出來就把整篇當一題。LLM 出錯時丟 `llm.LLMError`。"""
     system = (config.PROMPT_DIR / "split.md").read_text()
     user = user_message(article)
     started = time.monotonic()
     result = Split([])
     with llm.track(result.tally):
-        out = await llm.call(system, user, SCHEMA, config.MODEL, config.EFFORT)
+        out = await llm.call(system, user, SCHEMA, model or config.MODEL, config.EFFORT)
         for _ in range(config.RETRIES):
             problems = problems_of(out, question_only)
             if not problems:
@@ -53,7 +53,7 @@ async def split(article: Article, question_only: bool = False) -> Split:
             retry = (f"{user}\n\n<previous_output>\n{json.dumps(out, ensure_ascii=False)}\n</previous_output>\n"
                      f"<problems>\n" + "\n".join(f"- {p}" for p in problems) + "\n</problems>\n"
                      "上一次的輸出有上面這些問題，請修正後重新輸出。")
-            out = await llm.call(system, retry, SCHEMA, config.MODEL, config.EFFORT)
+            out = await llm.call(system, retry, SCHEMA, model or config.MODEL, config.EFFORT)
     result.seconds = time.monotonic() - started
     texts = [t for q in out.get("questions") or [] if (t := (q.get("text") or "").strip())]
     result.questions = texts if question_only else texts or [article.text.strip()]

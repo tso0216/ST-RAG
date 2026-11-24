@@ -30,9 +30,9 @@ PYTHONPATH=.:src .venv/bin/python -m v4.rag ask --article data/ptt_ask/ptt_M.177
 | `--log <路徑>` | 寫純文字 log（輸入、拆題、行程、每題每回合的判斷和工具呼叫、答案、用量）；沒給就不記 |
 | `--verbose` | 邊跑邊印步驟（`⏺` 判斷或工具呼叫、`⎿` 回傳的第一行） |
 
-需要：`data/geo/japan.duckdb`（本機地圖，地點解析用；沒有就停下）、`.env` 的 `OPENAI_API_KEY`（工具用 `query` 排序時算 embedding）。
+需要：`data/geo/japan.duckdb`（本機地圖，地點解析用；沒有就停下）；工具用 `query` 排序時算 embedding：`config.EMBEDDING_MODEL` 是 `text-embedding-` 開頭的用 `.env` 的 `OPENAI_API_KEY`，其他的呼叫 Ollama（`service.embedding.OLLAMA_URL`，環境變數 `OLLAMA_URL` 優先）。
 
-會寫進資料庫：地點解析新增的 `place`、`place_source`、別名；算過的 embedding（`embedding` 表）。
+會寫進資料庫：地點解析新增的 `place`、`place_source`、別名。embedding 不快取，每次重算。
 
 出錯：工具的參數錯、外部服務出錯，當成工具錯誤回給 LLM，迴圈繼續。本機地圖不存在、拆題或行程解析出錯，這篇停下，錯誤印在 stderr，有 `--log` 時寫進 `# 錯誤`。
 
@@ -59,7 +59,7 @@ PYTHONPATH=.:src .venv/bin/python -m v4.rag ask --article data/ptt_ask/ptt_M.177
 | `config.py` | 路徑、模型、上限、筆數這些參數 |
 | `pipeline.py` | 一篇的流程：讀輸入 → 拆題和解析行程（同時跑）→ 每題跑迴圈 → 合併；組第一則訊息 |
 | `split.py`、`prompts/split.md` | 拆題，檢查不過時附上次輸出和問題重問 |
-| `tools.py` | 8 個工具：「`Env`、參數 → 文字」的函式，不依賴 SDK。資料庫整個讀進記憶體（`Index`），`find_place` 新增地點後重讀。也有 embedding（先查表，沒有的才呼叫 OpenAI） |
+| `tools.py` | 8 個工具：「`Env`、參數 → 文字」的函式，不依賴 SDK。資料庫整個讀進記憶體（`Index`），`find_place` 新增地點後重讀。也有 embedding（每次呼叫 `service.embedding` 重算，不快取） |
 | `loop.py` | 把工具包成 MCP server、計呼叫次數、用 Agent SDK 跑一題，把訊息交給 `log.py` |
 | `log.py` | `--verbose` 的終端機輸出、`--log` 的檔案 |
 | `prompts/agent.md` | 迴圈的 system prompt（`{{NO_EVIDENCE_OPENING}}` 換成 `config` 的值） |

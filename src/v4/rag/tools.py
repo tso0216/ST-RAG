@@ -7,7 +7,6 @@
 """
 import json
 import math
-import os
 import re
 import sqlite3
 from collections import Counter
@@ -15,8 +14,8 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import numpy as np
-import requests
 
+from service import embedding
 from v4.extract.data_schema import LOCATED_YES, Context, PlaceRef
 
 from . import config
@@ -524,7 +523,7 @@ class Env:
     days: dict[str, UserDay] = field(default_factory=dict)
     geocoder: Any = None             # v4.extract 的 Geocoder（`resolve(PlaceRef, Context)`）
     question: str = ""               # 現在這一題的問句（find_place 解析新地點時當原文那一行）
-    embed: Any = None                # texts → 向量；None 用 OpenAI
+    embed: Any = None                # texts → 向量；None 用 `service.embedding`
     resolved: dict[tuple, int | None] = field(default_factory=dict)
     _index: Index | None = None
 
@@ -598,42 +597,52 @@ def query_arg(args: dict, required: bool, why: str) -> str:
 
 # ---------- embedding ----------
 
-def _openai_embed(texts: list[str]) -> list[list[float]]:
-    key = os.environ.get("OPENAI_API_KEY")
-    if not key:
-        raise RuntimeError("沒有 OPENAI_API_KEY（.env），不能用 query 排序")
-    r = requests.post("https://api.openai.com/v1/embeddings", timeout=120,
-                      headers={"Authorization": f"Bearer {key}"},
-                      json={"model": config.EMBEDDING_MODEL, "input": texts})
-    if r.status_code != 200:
-        raise RuntimeError(f"OpenAI embedding HTTP {r.status_code}：{r.text[:200]}")
-    return [d["embedding"] for d in sorted(r.json()["data"], key=lambda d: d["index"])]
+def query_text(query: str) -> str:
+    """查詢送去算向量前的樣子（Qwen3-Embedding 要加任務指令，見 `service.embedding.query_text`）。"""
+    return embedding.query_text(query, config.EMBEDDING_MODEL, config.QUERY_INSTRUCT)
 
 
 def embed(env: Env, texts: list[str]) -> np.ndarray:
-    """每段文字的向量（已正規化）。先查 `embedding` 表，沒有的才算，算完寫回表裡。"""
-    conn, model = env.conn, config.EMBEDDING_MODEL
-    conn.execute("CREATE TABLE IF NOT EXISTS embedding (model TEXT NOT NULL, text TEXT NOT NULL,"
-                 " vector BLOB NOT NULL, PRIMARY KEY (model, text))")
+    """每段文字的向量（已正規化）。用 `service.embedding` 時先查 `config.EMBEDDING_CACHE`，沒有的才算，算完寫回去；
+    `env.embed` 有給（測試用）就不快取。"""
+    if env.embed:
+        return _normalize(_compute(env.embed, texts))
+    model = config.EMBEDDING_MODEL
     unique = list(dict.fromkeys(texts))
-    found: dict[str, np.ndarray] = {}
-    for i in range(0, len(unique), 500):
-        chunk = unique[i:i + 500]
-        for text, blob in conn.execute(
-                f"SELECT text, vector FROM embedding WHERE model = ? AND text IN ({','.join('?' * len(chunk))})",
-                (model, *chunk)):
-            found[text] = np.frombuffer(blob, dtype=np.float32)
-    missing = [t for t in unique if t not in found]
-    for i in range(0, len(missing), config.EMBEDDING_BATCH):
-        chunk = missing[i:i + config.EMBEDDING_BATCH]
-        vectors = (env.embed or _openai_embed)(chunk)
-        with conn:
-            for text, v in zip(chunk, vectors):
-                arr = np.asarray(v, dtype=np.float32)
-                found[text] = arr
-                conn.execute("INSERT OR REPLACE INTO embedding (model, text, vector) VALUES (?, ?, ?)",
-                             (model, text, arr.tobytes()))
-    m = np.stack([found[t] for t in texts])
+    config.EMBEDDING_CACHE.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(config.EMBEDDING_CACHE, timeout=60)
+    try:
+        conn.execute("CREATE TABLE IF NOT EXISTS embedding (model TEXT NOT NULL, text TEXT NOT NULL,"
+                     " vector BLOB NOT NULL, PRIMARY KEY (model, text))")
+        found: dict[str, np.ndarray] = {}
+        for i in range(0, len(unique), 500):
+            chunk = unique[i:i + 500]
+            for text, blob in conn.execute(
+                    f"SELECT text, vector FROM embedding WHERE model = ? AND text IN ({','.join('?' * len(chunk))})",
+                    (model, *chunk)):
+                found[text] = np.frombuffer(blob, dtype=np.float32)
+        missing = [t for t in unique if t not in found]
+        for i in range(0, len(missing), config.EMBEDDING_BATCH):
+            chunk = missing[i:i + config.EMBEDDING_BATCH]
+            vectors = _compute(lambda c: embedding.embed(c, model), chunk)
+            with conn:   # 每批算完就寫，中途斷掉已算的不會白算
+                conn.executemany("INSERT OR REPLACE INTO embedding (model, text, vector) VALUES (?, ?, ?)",
+                                 [(model, t, v.tobytes()) for t, v in zip(chunk, vectors)])
+            found.update(zip(chunk, vectors))
+    finally:
+        conn.close()
+    return _normalize([found[t] for t in texts])
+
+
+def _compute(fn, texts: list[str]) -> list[np.ndarray]:
+    out = []
+    for i in range(0, len(texts), config.EMBEDDING_BATCH):
+        out += [np.asarray(v, dtype=np.float32) for v in fn(texts[i:i + config.EMBEDDING_BATCH])]
+    return out
+
+
+def _normalize(vectors: list[np.ndarray]) -> np.ndarray:
+    m = np.stack(vectors)
     return m / np.maximum(np.linalg.norm(m, axis=1, keepdims=True), 1e-12)
 
 
@@ -641,7 +650,7 @@ def rank(env: Env, query: str, items: list, text_of, id_of) -> list:
     """照跟 query 的餘弦相似度排；一樣時照 id。"""
     if not items:
         return []
-    vectors = embed(env, [query, *map(text_of, items)])
+    vectors = embed(env, [query_text(query), *map(text_of, items)])
     scores = vectors[1:] @ vectors[0]
     order = sorted(range(len(items)), key=lambda i: (-float(scores[i]), id_key(id_of(items[i]))))
     return [items[i] for i in order]

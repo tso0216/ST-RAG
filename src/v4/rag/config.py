@@ -17,8 +17,11 @@ DAY_LIMIT, DAY_MAX = 10, 20     # search_days 預設回幾天、最多回幾天
 PLACE_CANDIDATES = 5            # find_place 最多回幾個候選
 PLACE_SPREAD = 10               # 地點分布列前幾個
 
-EMBEDDING_MODEL = "text-embedding-3-large"
-EMBEDDING_BATCH = 128           # 一次最多送幾段給 OpenAI
+EMBEDDING_MODEL = "qwen3-embedding:0.6b"   # Ollama；換成 "text-embedding-3-large" 就改走 OpenAI（見 service/embedding.py）
+EMBEDDING_BATCH = 32            # 一次最多送幾段（Ollama 跑 CPU 時一批太大會超過 READ_TIMEOUT）
+EMBEDDING_CACHE = ROOT / "data" / "embedding.db"   # 算過的向量存這裡，key 是（模型, 文字）
+# Qwen3-Embedding 的查詢要加指令（文件不用）；OpenAI 的模型不加
+QUERY_INSTRUCT = "Given a travel question, retrieve travelers' trip records that help answer it"
 
 OVER_LIMIT_TEXT = "這一題查了太多次，沒有答完。"
 NO_EVIDENCE_OPENING = "資料庫沒有相關的旅客經驗，以下是一般知識"

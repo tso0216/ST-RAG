@@ -1,4 +1,4 @@
-"""命令列：`python -m v4.rag ask "問題"` 或 `python -m v4.rag ask --article <PTT 文章 JSON>`。"""
+"""命令列：`python -m v4.rag ask "問題"` 或 `PYTHONPATH=.:src .venv/bin/python -m v4.rag ask "鳥取砂丘適合小孩嗎？"`。"""
 import argparse
 import asyncio
 import sys
